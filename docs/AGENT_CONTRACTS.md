@@ -32,8 +32,8 @@ Owns:
 Does:
 
 - Log in to VAST with the retrieval login skill. Never log the token.
-- Upload is a confirmed step, not an automatic one. The file must be under 100 MB. Send `scenario=nhl` and `custom_prompt` from the contracts file.
-- Poll until that `original_video` has indexed segments. Return them sorted by start time.
+- Upload is a confirmed step, not an automatic one. One file per game; VAST segments it. The file must be under the live upload cap (`max_upload_size_mb`); over it, print the re-encode command. Send `scenario=nhl` and `custom_prompt` from the contracts file.
+- Return the segments indexed so far for that `original_video`, sorted by start time, with the status (`ready`, `indexing`, `missing_clip`).
 - Map a segment to the fields Lane B needs: `id`, `source`, `start_sec`, `end_sec`, `caption`.
 - Proxy `GET /api/segments/{id}/stream` to the VSS stream URL. The JWT stays on the server.
 - Read stored YOLO labels for one segment via `GET /api/v1/videos/detections?source=` (videos skill). Return the detections schema: label counts, or `available: false`. Do not invent a label. Do not return box coordinates.
@@ -64,7 +64,7 @@ Does:
 - Apply the decision rule from the spec in Python. Return one card object, `contract_version` 2, including `stream_path` of `/api/segments/{id}/stream`.
 - A failed sign extraction raises. It does not invent a `come_off`.
 - From a finished card, compute `clause` and `signs_true` with the priority table in the spec.
-- After the tape's cards exist, one chat completion phrases every why sentence. Send traces only (id, decision, clause, signs, `evidence_quote`). Temperature 0. The reply shape is `{ "sentences": [ { "id", "sentence" } ] }`. Accept a sentence only when it passes the checks in the spec. A rejected sentence drops that why. It does not drop the card and it does not invent a sentence.
+- For each batch of new cards, one chat completion per 20 cards phrases the why sentences. Send traces only (id, decision, clause, signs, `evidence_quote`). Temperature 0. The reply shape is `{ "sentences": [ { "id", "sentence" } ] }`. Accept a sentence only when it passes the checks in the spec. A rejected sentence drops that why. It does not drop the card and it does not invent a sentence.
 - This module owns every Weights & Biases HTTP call. It does not import `vss_client.py`.
 
 Paste this into Lane B's session:
@@ -81,7 +81,7 @@ Owns:
 
 Does:
 
-- One page. Fetch `GET /api/tape`. If `status` is not `ready`, show that status and do not invent cards.
+- One page. Fetch `GET /api/tape`. Show `status`. While it is `indexing`, render the cards that are there and poll the tape about every 15 seconds for new ones. On `missing_clip`, show the status and no cards. Never invent cards.
 - Play `stream_path` in `start_sec` order. Play on and watch continue. Come off pauses.
 - Render the clip, the four yes/no signs, the decision, and the caption.
 - For the card on screen, fetch `GET /api/cards/{id}/why` and `GET /api/segments/{id}/detections`. Show the why sentence under the caption. Show one in-frame line from `objects` (`In frame: person 2`). If either response is not 200, or `available` is false, omit that line. The card stays.
@@ -91,7 +91,7 @@ Does:
 Paste this into Lane C's session:
 
 ```text
-You are Lane C on Off-ice Flag, contract version 2. Read docs/OFF_ICE_FLAG_SPEC.md and docs/AGENT_CONTRACTS.md. Edit only tools/off-ice-flag/static/. The page plays GET /api/tape and pauses on come_off. Cards show signs, decision, caption, the why sentence, and the in-frame line. Questions come from GET /api/questions and POST /api/ask. Use the fixtures as the sample payloads. No build step and no medical wording.
+You are Lane C on Off-ice Flag, contract version 2. Read docs/OFF_ICE_FLAG_SPEC.md and docs/AGENT_CONTRACTS.md. Edit only tools/off-ice-flag/static/. The page plays GET /api/tape, polls it while status is indexing, and pauses on come_off. Cards show signs, decision, caption, the why sentence, and the in-frame line. Questions come from GET /api/questions and POST /api/ask. Use the fixtures as the sample payloads. No build step and no medical wording.
 ```
 
 ### Lane D — Questions, eval, wiring, deploy
@@ -127,7 +127,7 @@ Lane D registers these and they must keep these shapes:
 | Route | Implementation |
 |---|---|
 | `GET /health` | Lane D |
-| `GET /api/tape` | Lane D calls Lane A for segments, Lane B for each card, drops non-contact, sorts by `start_sec`, then caches why sentences and detections |
+| `GET /api/tape` | The latest snapshot from Lane D's background builder: Lane A segments, Lane B cards and why sentences, Lane A detections, in batches, sorted by `start_sec` |
 | `GET /api/segments/{id}/stream` | Lane A via `vss_client` |
 | `GET /api/segments/{id}/detections` | Cached detections schema. Lane A fetched it at tape build |
 | `GET /api/cards/{id}/why` | Cached why schema. Lane B phrased it at tape build |

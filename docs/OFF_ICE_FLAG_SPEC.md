@@ -8,6 +8,8 @@ The decision is only `come_off`, `watch`, or `play_on`. The product does not nam
 
 Version 2 adds the why sentence, stored detector labels, and a question router. The decision rule is the same rule as version 1.
 
+Long-clip update (same schemas, still version 2): one upload holds a whole game, VAST segments it, and the tape fills in while it indexes. See [Pipeline](#pipeline) and [Replay](#replay).
+
 ## Judging
 
 Source: [JUDGING.md](../JUDGING.md) on the VM (root markdown is gitignored; the criteria are repeated here).
@@ -28,8 +30,9 @@ Sponsors named on the room banner: tokens&, VAST, CoreWeave, SpaceX, NVIDIA, Wei
 
 The lab archive has no hockey. The demo needs one file the team can use.
 
-- `.mp4` or `.mov`, **100 MB or under**. Other allowed extensions are `.webm`, `.avi`, `.mkv`.
-- Two to four minutes. One angle. One stretch of play, in order.
+- One file for the whole game or period. VAST's segmenter cuts it into segments of about five seconds itself; the app does not split video.
+- `.mp4` or `.mov`, under the backend upload cap (`max_upload_size_mb` from `GET /api/v1/config`, about 100 MB). Other allowed extensions are `.webm`, `.avi`, `.mkv`. A long game is re-encoded to fit: `python tools/off-ice-flag/vss_client.py upload <file>` prints the ffmpeg command and bitrate when the file is over the cap.
+- One angle. Play in order.
 - Visible on screen without narration: one hit where a player stays down or leaves the ice, and one bump where both players get straight up.
 - Footage the team filmed or has rights to. Do not download YouTube or other internet video.
 
@@ -58,14 +61,17 @@ flowchart LR
 
 1. Upload the file with `scenario=nhl` and the custom prompt in [contracts/ingest_prompt.txt](../contracts/ingest_prompt.txt) (412 characters; the API cap is 800). The custom prompt overrides the preset text. `nhl` is only the scenario label.
 2. The running pipeline cuts the file into segments of about five seconds. Cosmos writes a caption per segment. Embeddings and YOLO detections are stored with it. The app does not call the GPU hosts.
-3. When the segments are searchable, the app drops any segment whose caption does not describe body contact, and sorts the rest by `start_sec`.
-4. For each remaining caption, Weights & Biases returns the four signs and a short quote copied from the caption. Temperature is 0. The reply is JSON only.
+3. A background builder polls VAST every 15 seconds and takes the segments that are searchable so far, in batches of 32. It does not wait for the whole game.
+4. For each caption, Weights & Biases returns contact, the four signs, and a short quote copied from the caption. Temperature is 0. The reply is JSON only. A segment whose caption does not describe body contact is not a card.
 5. Python applies the rule below and emits a card.
-6. One more Weights & Biases call phrases a why sentence for every card in that tape. Python checks the sentences. A sentence that fails the check is dropped. The card stays.
-7. The app reads each segment's stored YOLO sidecar and keeps label counts. A missing sidecar stores `available: false`. It does not invent a label.
-8. The page plays the cards in order. The why sentence and the in-frame line are already cached. The pause does not wait on a model.
+6. Weights & Biases phrases the why sentences for that batch's cards, 20 cards per call. Python checks the sentences. A sentence that fails the check is dropped. The card stays.
+7. The app reads each new card's stored YOLO sidecar and keeps label counts. A missing sidecar stores `available: false`. It does not invent a label.
+8. After each batch the tape is republished, sorted by `start_sec`, with status `indexing`. When VAST reports every segment indexed and every segment is processed, the clip recap runs once and the status becomes `ready`.
+9. The page plays the cards in order. The why sentence and the in-frame line are already cached. The pause does not wait on a model.
 
-Indexing a new file takes minutes. Playback after that is the real-time behavior: the action fires when that segment comes up. There is no live camera.
+Indexing a full game takes a while on the shared GPUs. Cards show up while it runs. Playback is the real-time behavior: the action fires when that segment comes up. There is no live camera.
+
+A sign extraction that fails is retried on the next poll, up to three times. After that the segment is left out and logged. It is never guessed.
 
 All VAST HTTP lives in `tools/off-ice-flag/vss_client.py`. All Weights & Biases HTTP lives in `tools/off-ice-flag/decision.py`. Those two modules do not import each other.
 
@@ -126,6 +132,8 @@ A why response that is not 200 leaves the sentence off. A detections response th
 
 `GET /api/tape` returns cards sorted by `start_sec`. The page plays them in that order through the stream proxy.
 
+While `status` is `indexing`, the tape holds the cards built so far. The page shows the status, plays what is there, and polls `GET /api/tape` about every 15 seconds to pick up new cards. `missing_clip` means VAST has nothing for this video yet: show the status and no cards.
+
 - Play on: show the card briefly and continue.
 - Watch: show the card and continue.
 - Come off: pause on that clip with the decision on screen. Resume continues down the tape.
@@ -134,7 +142,7 @@ The browser never receives the VAST JWT. The app proxies the stream.
 
 ## Why sentence
 
-Computed when the tape is built, then cached. `GET /api/cards/{id}/why` reads the cache.
+Computed when each batch of cards is built, then cached. `GET /api/cards/{id}/why` reads the cache.
 
 Weights & Biases receives the traces only: card id, decision, clause, signs, and `evidence_quote`. Temperature is 0. The reply is one JSON object:
 
@@ -249,7 +257,7 @@ Ingress `/app` is stripped. The process serves `/`.
 | POST | `/api/ask` | `{ "question": "..." }` | One question object, `source: "live"` |
 | GET | `/api/eval` | | Eval schema |
 
-Errors: unknown card id is 404. Ask with an empty question is 400. Tape status `indexing` or `missing_clip` on ask, why, or detections is 409 with `{ "error": "not_ready", "status": "<status>" }`. Upstream failure, or a model reply that fails the checks above, is 502 with `{ "error": "upstream" }` and no invented sentence or card.
+Errors: unknown card id is 404. Ask with an empty question is 400. Tape status `missing_clip` on ask, why, detections, or stream is 409 with `{ "error": "not_ready", "status": "missing_clip" }`. While `indexing`, those routes answer from the cards built so far. `GET /api/eval` is 409 until the tape is `ready`. Upstream failure, or a model reply that fails the checks above, is 502 with `{ "error": "upstream" }` and no invented sentence or card.
 
 Until `OFF_ICE_ORIGINAL_VIDEO` is set, tape, why, detections, and questions may return the fixtures, with `video_id` `fixture-period` on the tape. Set `X-Off-Ice-Fixture: 1` on those responses. Do not present fixture cards as the judged clip.
 

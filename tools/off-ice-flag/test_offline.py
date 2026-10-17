@@ -121,19 +121,23 @@ sidecar = {"frames": [{"detections": [{"label": "person", "bbox": [1, 2, 3, 4]},
 assert vss_client._label_counts(sidecar) == {"person": 2, "sports ball": 1}
 assert vss_client._label_counts({"boxes": [[1, 2, 3, 4]]}) == {}
 
-# --- Lane D: real-clip build with VAST and W&B faked -------------------------
+# --- Lane D: progressive build of a long game, VAST and W&B faked ------------
 segs = [{k: c[k] for k in ("id", "source", "start_sec", "end_sec", "caption")} for c in tape["cards"]]
 segs.insert(1, {"id": "seg-skate", "source": "s3://x/skate", "start_sec": 25, "end_sec": 30, "caption": "Players skating."})
-vss_client.segments = lambda ov: ("ready", segs)
 vss_client.detections = lambda i, s: next(d for d in dets["items"] if d["id"] == i) if i != "seg-head" else {"contract_version": 2, "id": i, "available": False, "objects": []}
 vss_client.synthesize = lambda ov, q: (qs["questions"][-1]["answer"], [("s3://x/skate", None, None), (None, 74.0, 80.0)])
 by_caption = {c["caption"]: c for c in tape["cards"]}
+calls = {"signs": 0, "why": 0}
 
 
 def fake_chat(messages):
     text = messages[-1]["content"]
     if text.startswith("Traces"):
+        calls["why"] += 1
         return json.dumps({"sentences": [{"id": w["card_id"], "sentence": w["sentence"]} for w in whys["items"]]})
+    calls["signs"] += 1
+    if "FAILS" in text:
+        raise decision.UpstreamError("bad reply")
     cap = next((c for c in by_caption if c in text), None)
     if cap is None:
         return '{"contact": false, "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false, "evidence_quote": ""}'
@@ -142,19 +146,42 @@ def fake_chat(messages):
 
 
 decision._chat = fake_chat
-built = questions.build_state("s3://team-45-vss-chunks/team-45/20261017_period.mp4")
-valid("tape", built.tape)
-assert [c["id"] for c in built.cards] == [c["id"] for c in tape["cards"]]
-assert built.tape["video_id"] == "20261017_period"
-assert built.whys == why_by_id
-assert built.recap[1] == ["seg-down"]
-assert [q["id"] for q in built.questions] == [q["id"] for q in qs["questions"]]
-for d in built.detections.values():
-    valid("detections", d)
-vss_client.segments = lambda ov: ("indexing", [])
-assert not questions.build_state("s3://x").ready
+ov = "s3://team-45-vss-chunks/team-45/20261017_game.mp4"
+b = questions.Builder(ov)
+assert b.state.tape["status"] == "indexing" and b.state.cards == []
 
-# --- Lane D: HTTP routes in fixture mode ------------------------------------
+vss_client.segments = lambda o: ("indexing", segs[:3])  # VAST has indexed the first three so far
+assert not b.step()
+part = b.state
+valid("tape", part.tape)
+assert part.tape["status"] == "indexing" and [c["id"] for c in part.cards] == ["seg-bump", "seg-head"]
+assert part.recap is None and "clip-recap" not in [q["id"] for q in part.questions]
+assert questions.ask(part, "was the head involved?")["card_ids"] == ["seg-head"]
+assert questions.ask(part, "who should come off?")["answer"] == questions.NO_CARD
+
+broken = {"id": "seg-bad", "source": "s3://x/bad", "start_sec": 110, "end_sec": 115, "caption": "FAILS to parse."}
+vss_client.segments = lambda o: ("ready", segs + [broken])
+assert not b.step() and not b.step()  # the bad segment is retried on each poll
+assert b.step()                       # third failure: left out, tape complete
+done = b.state
+valid("tape", done.tape)
+assert done.tape["status"] == "ready" and done.tape["video_id"] == "20261017_game"
+assert [c["id"] for c in done.cards] == [c["id"] for c in tape["cards"]]
+assert calls["signs"] == len(segs) + 3, calls  # each good segment once, the bad one three times
+assert done.whys == why_by_id and done.recap[1] == ["seg-down"]
+assert [q["id"] for q in done.questions] == [q["id"] for q in qs["questions"]]
+for d in done.detections.values():
+    valid("detections", d)
+
+calls["why"] = 0
+decision.phrase_whys([dict(tape["cards"][0], id=f"seg-{i:03d}") for i in range(45)])
+assert calls["why"] == 3  # 20 cards per W&B call
+
+vss_client.segments = lambda o: ("missing_clip", [])
+missing = questions.Builder("s3://x/none.mp4")
+assert not missing.step() and missing.state.tape["status"] == "missing_clip"
+
+# --- Lane D: HTTP routes ----------------------------------------------------
 from fastapi.testclient import TestClient
 
 import main
@@ -176,15 +203,17 @@ with TestClient(main.app) as client:
     assert a["card_ids"] == ["seg-down"] and a["source"] == "live"
     assert client.get("/api/eval").json()["matched"] == 8
 
-    questions._state = questions.State(tape={"contract_version": 2, "status": "indexing", "video_id": "x", "cards": []})
-    os.environ["OFF_ICE_ORIGINAL_VIDEO"] = "s3://x"
-    vss_client.segments = lambda ov: ("indexing", [])
-    assert client.get("/api/tape").json()["status"] == "indexing"
-    r = client.post("/api/ask", json={"question": "why"})
-    assert r.status_code == 409 and r.json() == {"error": "not_ready", "status": "indexing"}
-    assert client.get("/api/cards/seg-down/why").status_code == 409
-    vss_client.segments = lambda ov: (_ for _ in ()).throw(vss_client.UpstreamError("down"))
+    # a real game, mid-indexing: routes answer from the cards built so far
+    os.environ["OFF_ICE_ORIGINAL_VIDEO"] = ov
+    questions._builder, b.state = b, part
     r = client.get("/api/tape")
-    assert r.status_code == 502 and r.json() == {"error": "upstream"} and "X-Off-Ice-Fixture" not in r.headers
+    assert r.json()["status"] == "indexing" and len(r.json()["cards"]) == 2 and "X-Off-Ice-Fixture" not in r.headers
+    assert client.get("/api/cards/seg-head/why").status_code == 200
+    assert client.get("/api/cards/seg-down/why").status_code == 404  # not indexed yet
+    assert client.get("/api/eval").status_code == 409
+    b.state = missing.state
+    r = client.post("/api/ask", json={"question": "why"})
+    assert r.status_code == 409 and r.json() == {"error": "not_ready", "status": "missing_clip"}
+    assert client.get("/api/segments/seg-head/stream").status_code == 409
 
 print("ok: lanes A, B, D pass against contracts/fixtures")

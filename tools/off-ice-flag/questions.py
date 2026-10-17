@@ -7,6 +7,7 @@ import json
 import os
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,8 +50,9 @@ class State:
         return self.tape["cards"]
 
     def card(self, card_id):
-        if not self.ready:
-            raise NotReady(self.tape["status"])
+        """None for an unknown id. Works while indexing, on the cards built so far."""
+        if self.tape["status"] == "missing_clip":
+            raise NotReady("missing_clip")
         for c in self.cards:
             if c["id"] == card_id:
                 return c
@@ -211,8 +213,8 @@ def ask(state, text):
     text = (text or "").strip()
     if not text:
         raise ValueError("empty question")
-    if not state.ready:
-        raise NotReady(state.tape["status"])
+    if state.tape["status"] == "missing_clip":
+        raise NotReady("missing_clip")
     route = route_for(text)
     if route == "detections":
         return detections_answer(state, text)
@@ -251,51 +253,107 @@ def fixture_state():
     return state
 
 
-_card_cache = {}  # (segment id, caption) -> card or None; a rebuild only retries failures
+POLL_SEC = 15   # how often to look for newly indexed segments
+BATCH = 32      # segments per published step, so cards show up while a long game is processed
+MAX_TRIES = 3   # failed sign extractions for one segment, across polls, before it is left out
 
 
-def _card(seg):
-    key = (seg["id"], seg["caption"])
-    if key not in _card_cache:
-        _card_cache[key] = decision.make_card(seg)
-    return _card_cache[key]
+class Builder:
+    """Builds one original_video's tape in the background and publishes snapshots.
 
+    VAST segments the whole game itself (~700 segments for an hour). Cards appear
+    batch by batch while VAST is still indexing and while W&B works through what is
+    indexed. Routes read `state`; they never wait on a model.
+    """
 
-def build_state(original_video):
-    status, segments = vss_client.segments(original_video)
-    tape = {"contract_version": 2, "status": status, "video_id": Path(original_video).stem,
-            "original_video": original_video, "cards": []}
-    if status != "ready":
-        return State(tape=tape)
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        cards = [c for c in pool.map(_card, segments) if c]  # any failed extraction raises -> 502
-        tape["cards"] = sorted(cards, key=lambda c: c["start_sec"])
-        tape["duration_sec"] = max((s["end_sec"] for s in segments), default=0)
-        state = State(tape=tape, whys=decision.phrase_whys(tape["cards"]))
+    def __init__(self, original_video):
+        self.ov = original_video
+        self.cards = {}      # segment id -> (caption, card or None for no contact)
+        self.tries = {}      # segment id -> failed extractions
+        self.whys, self.dets = {}, {}
+        self.recap = None
+        self.pool = ThreadPoolExecutor(max_workers=8)
+        self.state = State(tape=self._tape("indexing", []))
 
-        def det(c):
+    def _tape(self, status, segments):
+        cards = sorted((c for _, c in self.cards.values() if c), key=lambda c: c["start_sec"])
+        tape = {"contract_version": 2, "status": status, "video_id": Path(self.ov).stem,
+                "original_video": self.ov, "cards": cards}
+        if segments:
+            tape["duration_sec"] = max(s["end_sec"] for s in segments)
+        return tape
+
+    def _publish(self, status, segments):
+        state = State(tape=self._tape(status, segments), whys=dict(self.whys), detections=dict(self.dets),
+                      recap=self.recap)
+        state.questions = saved_questions(state)
+        self.state = state
+
+    def _todo(self, segments):
+        return [s for s in segments
+                if self.cards.get(s["id"], (None,))[0] != s["caption"] and self.tries.get(s["id"], 0) < MAX_TRIES]
+
+    def _card(self, seg):
+        try:
+            self.cards[seg["id"]] = (seg["caption"], decision.make_card(seg))
+            self.whys.pop(seg["id"], None)  # a re-ingested caption gets a fresh why
+        except decision.UpstreamError as e:
+            n = self.tries[seg["id"]] = self.tries.get(seg["id"], 0) + 1
+            # ponytail: after MAX_TRIES the segment is left out and only logged; the tape
+            # schema has no field to show it. Check pod logs before trusting a full game.
+            print(f"segment {seg['id']}: sign extraction failed ({n}/{MAX_TRIES}): {e}", flush=True)
+
+    def _detect(self, card):
+        try:
+            self.dets[card["id"]] = vss_client.detections(card["id"], card["source"])
+        except vss_client.UpstreamError:
+            pass  # not cached -> that route answers 502, the card stays
+
+    def step(self):
+        """One pass over what VAST has indexed. True when the tape is complete."""
+        vast_status, segments = vss_client.segments(self.ov)
+        todo = self._todo(segments)
+        for i in range(0, len(todo), BATCH):
+            batch = todo[i:i + BATCH]
+            list(self.pool.map(self._card, batch))
+            new = [c for s in batch if (c := self.cards.get(s["id"], (None, None))[1]) and c["id"] not in self.whys]
+            self.whys.update(decision.phrase_whys(new))
+            list(self.pool.map(self._detect, new))
+            self._publish("indexing", segments)
+        complete = vast_status == "ready" and not self._todo(segments)
+        if complete:
             try:
-                return vss_client.detections(c["id"], c["source"])
-            except vss_client.UpstreamError:
-                return None  # not cached -> that route answers 502, the card stays
-        state.detections = {d["id"]: d for d in pool.map(det, tape["cards"]) if d}
-    try:
-        state.recap = _recap(state, original_video, "What happens in this clip?")
-    except (vss_client.UpstreamError, Upstream):
-        state.recap = None
-    state.questions = saved_questions(state)
-    return state
+                self.recap = _recap(self.state, self.ov, "What happens in this clip?")
+            except (vss_client.UpstreamError, Upstream) as e:
+                print(f"clip recap skipped: {e}", flush=True)
+        status = "ready" if complete else ("indexing" if segments or vast_status == "indexing" else "missing_clip")
+        self._publish(status, segments)
+        return complete
+
+    def run(self):
+        while True:
+            try:
+                if self.step():
+                    return
+            except Exception as e:  # VAST or W&B down: keep the last snapshot, try again
+                print(f"tape build: {type(e).__name__}: {e}", flush=True)
+            time.sleep(POLL_SEC)
 
 
 _lock = threading.Lock()
-_state = None
+_builder = None
+_fixture = None
 
 
 def current_state():
-    """Fixtures until OFF_ICE_ORIGINAL_VIDEO is set. A ready tape is built once and cached."""
-    global _state
+    """Fixtures until OFF_ICE_ORIGINAL_VIDEO is set; then the builder's latest snapshot."""
+    global _builder, _fixture
+    ov = os.environ.get("OFF_ICE_ORIGINAL_VIDEO", "").strip()
     with _lock:
-        ov = os.environ.get("OFF_ICE_ORIGINAL_VIDEO", "").strip()
-        if _state is None or not _state.ready or _state.fixture != (not ov):
-            _state = build_state(ov) if ov else fixture_state()
-        return _state
+        if not ov:
+            _fixture = _fixture or fixture_state()
+            return _fixture
+        if _builder is None or _builder.ov != ov:
+            _builder = Builder(ov)
+            threading.Thread(target=_builder.run, daemon=True).start()
+        return _builder.state

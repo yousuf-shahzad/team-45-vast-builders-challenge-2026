@@ -234,23 +234,26 @@ def why_object(card, sentence):
             "signs_true": t["signs_true"], "evidence_quote": card["evidence_quote"], "sentence": sentence.strip()}
 
 
+WHY_BATCH = 20  # cards per call; a full game has too many cards for one reply
+
+
 def phrase_whys(cards):
-    """One W&B call for the whole tape -> {card_id: why object}. Rejected or failed -> absent."""
-    if not cards:
-        return {}
-    traces = json.dumps([trace(c) for c in cards], indent=1)
-    try:
-        reply = _chat([{"role": "system", "content": WHY_SYSTEM},
-                       {"role": "user", "content": WHY_USER.format(traces=traces)}])
-        items = _json_object(reply).get("sentences") or []
-    except (UpstreamError, ValueError):
-        return {}
-    by_id = {c["id"]: c for c in cards}
+    """{card_id: why object}, one W&B call per WHY_BATCH cards. Rejected or failed -> absent."""
     out = {}
-    for item in items:
-        card = by_id.get(item.get("id")) if isinstance(item, dict) else None
-        if card and sentence_ok(item.get("sentence"), card):
-            out[card["id"]] = why_object(card, item["sentence"])
+    for i in range(0, len(cards), WHY_BATCH):
+        batch = cards[i:i + WHY_BATCH]
+        traces = json.dumps([trace(c) for c in batch], indent=1)
+        try:
+            reply = _chat([{"role": "system", "content": WHY_SYSTEM},
+                           {"role": "user", "content": WHY_USER.format(traces=traces)}])
+            items = _json_object(reply).get("sentences") or []
+        except (UpstreamError, ValueError):
+            continue
+        by_id = {c["id"]: c for c in batch}
+        for item in items:
+            card = by_id.get(item.get("id")) if isinstance(item, dict) else None
+            if card and sentence_ok(item.get("sentence"), card):
+                out[card["id"]] = why_object(card, item["sentence"])
     return out
 
 

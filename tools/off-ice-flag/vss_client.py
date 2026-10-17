@@ -6,7 +6,7 @@ leaves this module. Does not import decision.py.
 
 CLI (run on the VM, where the team config is):
     python vss_client.py login
-    python vss_client.py upload <file.mp4>          # asks before sending
+    python vss_client.py upload <game.mp4>          # one file, any length; VAST segments it. Asks first
     python vss_client.py find <filename-part>       # find original_video after upload
     python vss_client.py segments <original_video>  # raw + mapped rows, to check field names
 """
@@ -14,6 +14,8 @@ CLI (run on the VM, where the team config is):
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -24,7 +26,7 @@ from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MAX_UPLOAD_MB = 100
+DEFAULT_UPLOAD_MB = 100  # only if /api/v1/config does not say
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".avi", ".mkv"}
 SEGMENT_SEC = 5.0  # pipeline cuts ~5 s segments; only used when a row has no timing fields
 
@@ -178,7 +180,9 @@ def segments(original_video):
     Returns (status, rows). status is ready / indexing / missing_clip.
     """
     try:
-        raw = _json("/api/v1/tools/segments", params={"original_video": original_video})
+        # ponytail: `limit` is a guess at the param name; a full game is ~700+ segments. If the
+        # CLI shows fewer rows than expected_segments, find the real paging param.
+        raw = _json("/api/v1/tools/segments", params={"original_video": original_video, "limit": 5000})
     except NotFound:
         raw = []
     rows = [map_segment(r, i) for i, r in enumerate(_rows(raw))]
@@ -287,13 +291,37 @@ def ingest_prompt():
     raise FileNotFoundError("ingest_prompt.txt")
 
 
-def upload(path):
-    """Multipart upload with scenario=nhl and the contract prompt. Returns the API response."""
+def upload_cap_mb():
+    """The backend's live upload cap (upload skill: read it, don't hardcode)."""
+    cfg = _json("/api/v1/config")
+    return float(_first(cfg.get("app") or {}, ("max_upload_size_mb",)) or _first(cfg, ("max_upload_size_mb",))
+                 or DEFAULT_UPLOAD_MB)
+
+
+def fit_hint(path, cap_mb):
+    """An ffmpeg command that re-encodes a long game under the cap, so it stays one upload."""
+    duration = None
+    if shutil.which("ffprobe"):
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                              str(path)], capture_output=True, text=True).stdout.strip()
+        duration = float(out) if out else None
+    if not duration:
+        return f"duration unknown: pick video kbps = {cap_mb:.0f} * 7400 / duration_sec"
+    kbps = int(cap_mb * 8000 * 0.92 / duration)
+    return (f"ffmpeg -i {path.name} -vf scale=-2:540 -c:v libx264 -preset fast -b:v {kbps}k "
+            f"-maxrate {kbps}k -bufsize {2 * kbps}k -an {path.stem}_fit.mp4   # {duration / 60:.0f} min at {kbps} kbps")
+
+
+def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
+    """Multipart upload with scenario=nhl and the contract prompt. Returns the API response.
+
+    One file per game: the DataEngine segmenter cuts it into ~5 s segments itself.
+    """
     path = Path(path)
     if path.suffix.lower() not in VIDEO_EXTS:
         raise ValueError(f"extension {path.suffix} not allowed")
-    if path.stat().st_size > MAX_UPLOAD_MB * 1024 * 1024:
-        raise ValueError(f"file is over {MAX_UPLOAD_MB} MB")
+    if path.stat().st_size > cap_mb * 1024 * 1024:
+        raise ValueError(f"file is over the {cap_mb:.0f} MB upload cap. Re-encode it: {fit_hint(path, cap_mb)}")
     fields = {"is_public": "false", "scenario": "nhl", "custom_prompt": ingest_prompt(),
               "camera_id": "rink_cam-1", "location": "rink", "tags": "off-ice-flag"}
     boundary = uuid.uuid4().hex
@@ -333,22 +361,28 @@ def _cli(argv):
         print("login ok")
     elif cmd == "upload" and arg:
         p = Path(arg)
-        print(f"Upload {p.name} ({p.stat().st_size / 1e6:.1f} MB), scenario=nhl, custom_prompt "
+        cap = upload_cap_mb()
+        if p.stat().st_size > cap * 1024 * 1024:
+            sys.exit(f"{p.name} is {p.stat().st_size / 1e6:.0f} MB, over the {cap:.0f} MB cap. Re-encode it:\n"
+                     f"  {fit_hint(p, cap)}")
+        print(f"Upload {p.name} ({p.stat().st_size / 1e6:.1f} MB of {cap:.0f} MB), scenario=nhl, custom_prompt "
               f"({len(ingest_prompt())} chars), private. Type yes to send:", end=" ")
         if input().strip().lower() != "yes":
             sys.exit("not sent")
-        res = upload(p)
+        res = upload(p, cap)
         print(json.dumps(res, indent=2))
         print(f"Next: python vss_client.py find {p.stem}  (once indexed), then set OFF_ICE_ORIGINAL_VIDEO")
     elif cmd == "find" and arg:
         for row in find(arg):
             print(*row, sep="\t")
     elif cmd == "segments" and arg:
-        raw = _json("/api/v1/tools/segments", params={"original_video": arg})
+        raw = _json("/api/v1/tools/segments", params={"original_video": arg, "limit": 5000})
         first = _rows(raw)[:1]
         print("raw first row keys:", sorted(first[0]) if first else "none")
         status, rows = segments(arg)
-        print("status:", status, "segments:", len(rows))
+        stats = _json("/api/v1/dashboard/stats", params={"scope": "all"})
+        exp = [v.get("expected_segments") for v in stats.get("recent_videos") or [] if v.get("original_video") == arg]
+        print("status:", status, "segments:", len(rows), "expected:", exp[0] if exp else "not in recent_videos")
         for r in rows[:5]:
             print(json.dumps(r)[:300])
     else:
