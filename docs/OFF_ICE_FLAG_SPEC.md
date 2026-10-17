@@ -218,6 +218,10 @@ Saved decision questions use this same card filter. So do live steps 1 and 2, af
 - Otherwise all cards.
 - `before` also includes the contact card immediately before each selected card. `after` includes the next one. Keep `start_sec` order.
 
+### Search footage
+
+`GET /api/search?q=` runs VAST hybrid search (`POST /api/v1/search`, caption text plus visual vectors) with `tags: ["off-ice-flag"]`, the tag the upload sets. Hits map to cards by segment `source` only, never by time, so another video's segments cannot match. Non-contact segments have no card and are dropped. With the fixture header, search ranks the sample captions by shared words and calls nothing. An empty query is 400.
+
 This product does not call `POST /api/v1/agent/search-and-answer`. That route is for filtered search across the archive. This clip is already known, so clip questions use agent ask with `original_video`.
 
 While the fixture header is set, live ask uses the fixture tape, why sentences, detections, and clip recap. It does not call VAST or Weights & Biases. `tools` still names the production path. The header is what marks the body as a fixture.
@@ -258,6 +262,7 @@ Ingress `/app` is stripped. The process serves `/`.
 | GET | `/api/cards/{id}/why` | | Why schema |
 | GET | `/api/questions` | | `{ "contract_version": 2, "questions": [ ... ] }` |
 | POST | `/api/ask` | `{ "question": "..." }` | One question object, `source: "live"` |
+| GET | `/api/search?q=` | | `{ "query": "...", "card_ids": [ ... ] }`, best match first |
 | GET | `/api/eval` | | Eval schema |
 
 Errors: unknown card id is 404. Ask with an empty question is 400. Tape status `missing_clip` on ask, why, detections, or stream is 409 with `{ "error": "not_ready", "status": "missing_clip" }`. While `indexing`, those routes answer from the cards built so far. `GET /api/eval` is 409 until the tape is `ready`. Upstream failure, or a model reply that fails the checks above, is 502 with `{ "error": "upstream" }` and no invented sentence or card.

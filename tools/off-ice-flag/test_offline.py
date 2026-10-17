@@ -123,6 +123,10 @@ assert questions.ask(state, "what is in the frame")["answer"].startswith("In fra
 assert questions.recap_ok(qs["questions"][-1]["answer"])
 assert not questions.recap_ok("Then he should come off the ice.")
 
+# --- Lane D: search ----------------------------------------------------------
+assert questions.search(state, "hits into the boards")["card_ids"] == ["seg-bump"]
+assert questions.search(state, "stays down then skates to the bench")["card_ids"][0] == "seg-down"
+
 # --- Lane D: eval -----------------------------------------------------------
 e = evaluation.score(load("eval.json")["labels"], tape["cards"])
 valid("eval", e)
@@ -219,6 +223,8 @@ with TestClient(main.app) as client:
     a = client.post("/api/ask", json={"question": "Who should have come off?"}).json()
     assert a["card_ids"] == ["seg-down"] and a["source"] == "live"
     assert client.get("/api/eval").json()["matched"] == 8
+    assert client.get("/api/search", params={"q": "boards"}).json() == {"query": "boards", "card_ids": ["seg-bump"]}
+    assert client.get("/api/search", params={"q": " "}).status_code == 400
 
     # a real game, mid-indexing: routes answer from the cards built so far
     os.environ["OFF_ICE_ORIGINAL_VIDEO"] = ov
@@ -228,6 +234,8 @@ with TestClient(main.app) as client:
     assert client.get("/api/cards/seg-head/why").status_code == 200
     assert client.get("/api/cards/seg-down/why").status_code == 404  # not indexed yet
     assert client.get("/api/eval").status_code == 409
+    vss_client.search = lambda q: ["s3://elsewhere/x", segs[2]["source"], segs[0]["source"], segs[0]["source"]]
+    assert client.get("/api/search", params={"q": "head hit"}).json()["card_ids"] == ["seg-head", "seg-bump"]
     b.state = missing.state
     r = client.post("/api/ask", json={"question": "why"})
     assert r.status_code == 409 and r.json() == {"error": "not_ready", "status": "missing_clip"}

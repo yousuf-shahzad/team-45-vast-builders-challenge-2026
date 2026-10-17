@@ -114,6 +114,13 @@ async def ask(request: Request):
     return await run_in_threadpool(lambda: questions.ask(questions.current_state(), text))
 
 
+@app.get("/api/search")
+def search(q: str = ""):
+    if not q.strip():
+        return _err(400, error="empty query")
+    return questions.search(questions.current_state(), q)
+
+
 @app.get("/api/eval")
 def score():
     state = questions.current_state()

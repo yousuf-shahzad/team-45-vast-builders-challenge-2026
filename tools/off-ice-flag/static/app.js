@@ -1,5 +1,5 @@
 "use strict";
-// Lane C: replay page for Off-ice Flag (contract version 2). No build step.
+// Lane C: Off-ice Flag replay page (contract version 2). No build step.
 // All URLs are relative to the page, because Ingress serves the app under /app/.
 
 const $ = (id) => document.getElementById(id);
@@ -20,14 +20,16 @@ let tape = null;
 let cards = [];
 let curId = null;
 let playing = false;
-let waiting = false; // reached the end while VAST is still indexing
+let waiting = false; // reached the end while the game is still being processed
 let clipFinished = false;
 let holdTimer = null;
 let simTimer = null;
 let pollTimer = null;
 let filter = "all";
 let sort = "time";
+let matches = null; // card ids from the last search, best first
 let saved = [];
+let evalLoaded = false;
 const whyCache = new Map();
 const detCache = new Map();
 
@@ -35,9 +37,12 @@ const detCache = new Map();
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const url = (path) => BASE + path.replace(/^\//, "");
+const byId = (id) => cards.find((c) => c.id === id);
 const curIndex = () => cards.findIndex((c) => c.id === curId);
 const signCount = (c) => SIGNS.filter(([k]) => c.signs[k]).length;
 const trueSigns = (c) => SIGNS.filter(([k]) => c.signs[k]).map(([, label]) => label);
+const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
+const duration = () => tape.duration_sec || (cards.length ? cards[cards.length - 1].end_sec : 0);
 
 function fmt(sec) {
   const s = Math.max(0, Math.floor(sec));
@@ -55,7 +60,7 @@ function highlight(caption, quote) {
 async function api(path, opts) {
   const r = await fetch(url(path), opts);
   let body = null;
-  try { body = await r.json(); } catch { /* stream or empty body */ }
+  try { body = await r.json(); } catch { /* empty body */ }
   return { ok: r.ok, status: r.status, body, fixture: r.headers.get("X-Off-Ice-Fixture") === "1" };
 }
 
@@ -68,6 +73,9 @@ async function cached(map, id, path) {
   return null;
 }
 
+const whyOf = (id) => cached(whyCache, id, `api/cards/${encodeURIComponent(id)}/why`);
+const detOf = (id) => cached(detCache, id, `api/segments/${encodeURIComponent(id)}/detections`);
+
 // --- tape ------------------------------------------------------------------
 
 async function loadTape() {
@@ -75,7 +83,7 @@ async function loadTape() {
   let r = null;
   try { r = await api("api/tape"); } catch { /* network */ }
   if (!r || !r.ok) {
-    setStatus("error", "Can't reach the tape. Retrying…");
+    setStatus("error", "Can't reach the tape · retrying");
     pollTimer = setTimeout(loadTape, POLL_MS);
     return;
   }
@@ -83,51 +91,59 @@ async function loadTape() {
   $("fixture").hidden = !r.fixture;
   const before = cards.length;
   cards = tape.cards.slice().sort((a, b) => a.start_sec - b.start_sec);
-  renderStatus();
+  renderHeader();
   renderTimeline();
-  renderList();
+  renderLog();
+  renderSummary();
   renderEmpty();
   updateTransport();
   loadQuestions();
+  if (tape.status === "ready" && !evalLoaded) loadEval();
+  if (tape.status !== "ready") renderEvalPending();
   if (waiting && cards.length > before) { waiting = false; next(); }
   if (tape.status !== "ready") pollTimer = setTimeout(loadTape, POLL_MS);
 }
 
 function setStatus(kind, text) {
   const el = $("status");
-  el.className = `pill s-${kind}`;
+  el.className = `tag status s-${kind}`;
   el.textContent = text;
 }
 
-function renderStatus() {
-  const n = cards.length, plural = n === 1 ? "card" : "cards";
-  if (tape.status === "ready") setStatus("ready", `Ready · ${n} ${plural}`);
-  else if (tape.status === "indexing") setStatus("indexing", `Indexing · ${n} ${plural} so far`);
-  else setStatus("missing_clip", "No clip indexed yet");
+function renderHeader() {
+  const game = $("game");
+  game.textContent = tape.video_id;
+  game.hidden = !tape.video_id;
+  if (tape.status === "ready") setStatus("ready", `Game processed · ${Math.max(1, Math.round(duration() / 60))} min`);
+  else if (tape.status === "indexing") setStatus("indexing", `Processing · ${plural(cards.length, "card")} so far`);
+  else setStatus("missing_clip", "No game indexed yet");
 }
 
 function renderEmpty() {
   const empty = $("empty");
   if (curId) { empty.hidden = true; return; }
   empty.hidden = false;
-  let text = "Press Play tape to start.";
-  if (tape.status === "missing_clip") text = "Upload the game. This tape fills in while VAST indexes it.";
-  else if (!cards.length && tape.status === "indexing") text = "Indexing. Cards appear here as segments are processed.";
-  else if (!cards.length) text = "No contact found in this clip.";
+  let text = "Press Play tape, or pick a moment below.";
+  if (tape.status === "missing_clip") text = "Upload the game. The tape fills in while VAST indexes it.";
+  else if (!cards.length && tape.status === "indexing") text = "Processing the game. Moments appear here as segments are indexed.";
+  else if (!cards.length) text = "No contact found in this game.";
   $("emptyText").textContent = text;
 }
 
 function renderTimeline() {
-  const dur = tape.duration_sec || (cards.length ? cards[cards.length - 1].end_sec : 0) || 1;
-  $("durLabel").textContent = fmt(dur);
-  $("timeline").innerHTML = cards.map((c) => {
-    const left = Math.min(100, (c.start_sec / dur) * 100).toFixed(3);
+  const dur = duration() || 1;
+  const quarters = [0, 0.25, 0.5, 0.75, 1];
+  const dividers = quarters.slice(1, -1).map((f) => `<span class="div" style="left:${f * 100}%"></span>`).join("");
+  $("timeline").innerHTML = dividers + cards.map((c) => {
+    const left = Math.min(99.2, Math.max(0.8, (c.start_sec / dur) * 100)).toFixed(3);
     const label = `${WORD[c.decision]} at ${fmt(c.start_sec)}`;
-    return `<button type="button" class="tick d-${c.decision}${c.id === curId ? " cur" : ""}" style="left:${left}%" data-id="${esc(c.id)}" title="${label}" aria-label="${label}"></button>`;
+    const dim = matches && !matches.includes(c.id) ? " dim" : "";
+    return `<button type="button" class="mk d-${c.decision}${c.id === curId ? " cur" : ""}${dim}" style="left:${left}%" data-id="${esc(c.id)}" title="${label}" aria-label="${label}"></button>`;
   }).join("");
+  $("axis").innerHTML = quarters.map((f) => `<span style="left:${f * 100}%">${fmt(f * dur)}</span>`).join("");
 }
 
-function renderList() {
+function renderLog() {
   const counts = { all: cards.length, come_off: 0, watch: 0, play_on: 0 };
   cards.forEach((c) => counts[c.decision]++);
   document.querySelectorAll(".filters button").forEach((b) => {
@@ -135,48 +151,106 @@ function renderList() {
     b.textContent = `${f === "all" ? "All" : WORD[f]} ${counts[f]}`;
     b.setAttribute("aria-pressed", String(f === filter));
   });
-  let rows = cards.filter((c) => filter === "all" || c.decision === filter);
-  if (sort === "signs") {
-    rows = rows.slice().sort((a, b) => signCount(b) - signCount(a) || RANK[b.decision] - RANK[a.decision] || a.start_sec - b.start_sec);
+  let rows;
+  if (matches) {
+    rows = matches.map(byId).filter(Boolean);
+  } else {
+    rows = cards.filter((c) => filter === "all" || c.decision === filter);
+    if (sort === "signs") {
+      rows = rows.slice().sort((a, b) => signCount(b) - signCount(a) || RANK[b.decision] - RANK[a.decision] || a.start_sec - b.start_sec);
+    }
   }
-  $("items").innerHTML = rows.map((c) => `
-    <li><button type="button" class="item${c.id === curId ? " cur" : ""}" data-id="${esc(c.id)}">
-      <span class="clock">${fmt(c.start_sec)}</span>
-      <span class="decision sm d-${c.decision}">${WORD[c.decision]}</span>
-      <span class="n" title="Visible signs">${signCount(c)}/4</span>
-      <span class="snip">${esc(c.caption)}</span>
-    </button></li>`).join("") || `<li class="none">${filter === "all" ? "No cards yet." : "No cards for this filter."}</li>`;
+  $("rows").innerHTML = rows.map((c) => `
+    <tr data-id="${esc(c.id)}" class="${c.id === curId ? "cur" : ""}" tabindex="0">
+      <td class="mono">${fmt(c.start_sec)}</td>
+      <td><span class="pill d-${c.decision}">${WORD[c.decision]}</span></td>
+      <td class="what"><span>${esc(c.caption)}</span></td>
+      <td class="mono col-signs">${signCount(c)}/4</td>
+      <td><button type="button" class="link" data-id="${esc(c.id)}">Play clip</button></td>
+    </tr>`).join("")
+    || `<tr><td colspan="5" class="none">${matches ? "No moments match that search." : cards.length ? "No moments for this filter." : "No moments yet."}</td></tr>`;
+}
+
+function renderSummary() {
+  const n = { come_off: 0, watch: 0, play_on: 0 };
+  cards.forEach((c) => n[c.decision]++);
+  $("nCome").textContent = n.come_off;
+  $("nWatch").textContent = n.watch;
+  $("nPlay").textContent = n.play_on;
+  const recap = saved.find((q) => q.id === "clip-recap");
+  $("recap").textContent = recap ? recap.answer
+    : tape.status === "ready" ? "No recap for this game." : "The recap is written once the whole game is processed.";
+  const flagged = cards.filter((c) => c.decision !== "play_on");
+  const secs = flagged.reduce((t, c) => t + (c.end_sec - c.start_sec), 0);
+  const dur = duration();
+  $("reviewTime").textContent = dur
+    ? `Reviewing the ${plural(flagged.length, "come off and watch moment")} takes about ${Math.max(1, Math.round(secs / 60))} min instead of ${Math.max(1, Math.round(dur / 60))} min of game.`
+    : "";
+}
+
+// --- eval ------------------------------------------------------------------
+
+function renderEvalPending() {
+  $("evalRows").innerHTML = "";
+  $("evalNote").textContent = "Scored once the game is processed: eight moments labelled by hand, matched within 5 s.";
+}
+
+async function loadEval() {
+  let r = null;
+  try { r = await api("api/eval"); } catch { /* keep pending */ }
+  if (!r || !r.ok) {
+    $("evalRows").innerHTML = "";
+    $("evalNote").textContent = r && r.status === 409
+      ? "Waiting for hand labels (labels.json): eight moments, matched within 5 s."
+      : "Score unavailable right now.";
+    return;
+  }
+  evalLoaded = true;
+  const e = r.body;
+  const signMisses = e.misses.filter((m) => m.reason.includes("signs differ")).length;
+  const rows = [
+    ["Moments labelled by hand", e.total],
+    ["Decisions matched", `${e.matched} / ${e.total}`],
+    ["Decision right, signs off", signMisses],
+    ["Other misses", e.misses.length - signMisses],
+  ];
+  $("evalRows").innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("");
+  $("evalNote").textContent = r.fixture
+    ? "Sample labels on sample cards, not the judged game."
+    : "Scores the decision on each card, not the why sentences or answers.";
 }
 
 // --- card ------------------------------------------------------------------
 
 function renderCard(c) {
   const n = signCount(c);
-  $("card").innerHTML = `
-    <div class="card-head">
-      <span class="decision d-${c.decision}">${WORD[c.decision]}</span>
-      <span class="clock">${fmt(c.start_sec)}–${fmt(c.end_sec)}</span>
+  const el = $("card");
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="cv-head">
+      <span class="pill d-${c.decision}">${WORD[c.decision]}</span>
+      <span class="mono muted">${fmt(c.start_sec)}–${fmt(c.end_sec)}</span>
+      <span class="score" aria-label="Visible signs ${n} of 4">
+        <span class="pips">${SIGNS.map(([k]) => `<i class="${c.signs[k] ? "on" : ""}"></i>`).join("")}</span>
+        Visible signs <b>${n} of 4</b>
+      </span>
     </div>
-    <div class="score" aria-label="Visible signs ${n} of 4">
-      <span class="pips">${SIGNS.map(([k]) => `<i class="${c.signs[k] ? "on" : ""}"></i>`).join("")}</span>
-      <span>Visible signs <b>${n} of 4</b></span>
-    </div>
-    <ul class="signs">${SIGNS.map(([k, label]) =>
-      `<li class="${c.signs[k] ? "yes" : "no"}"><span>${label}</span><b>${c.signs[k] ? "Yes" : "No"}</b></li>`).join("")}
-    </ul>
-    <figure class="caption"><figcaption>Caption</figcaption><p>${highlight(c.caption, c.evidence_quote)}</p></figure>
-    <p class="why" id="why" hidden></p>
-    <p class="inframe" id="inframe" hidden></p>
-    <p class="note">Counts only the signs the caption states.</p>`;
+    <div class="cv-body">
+      <ul class="signs">${SIGNS.map(([k, label]) =>
+        `<li class="${c.signs[k] ? "yes" : "no"}"><span>${label}</span><b>${c.signs[k] ? "Yes" : "No"}</b></li>`).join("")}
+      </ul>
+      <div class="cv-text">
+        <p class="caption"><span class="lbl">Caption</span>${highlight(c.caption, c.evidence_quote)}</p>
+        <p class="why" id="why" hidden></p>
+        <p class="inframe" id="inframe" hidden></p>
+        <p class="fine">Counts only the signs the caption states.</p>
+      </div>
+    </div>`;
   loadExtras(c);
 }
 
 async function loadExtras(c) {
-  const id = encodeURIComponent(c.id);
-  const [why, det] = await Promise.all([
-    cached(whyCache, c.id, `api/cards/${id}/why`),
-    cached(detCache, c.id, `api/segments/${id}/detections`),
-  ]);
+  const [why, det] = await Promise.all([whyOf(c.id), detOf(c.id)]);
   if (curId !== c.id) return;
   if (why && why.sentence) { $("why").textContent = why.sentence; $("why").hidden = false; }
   if (det && det.available && det.objects.length) {
@@ -204,19 +278,21 @@ function show(i) {
   curId = c.id;
   const chip = $("chip");
   chip.className = `chip d-${c.decision}`;
-  chip.textContent = WORD[c.decision];
+  chip.textContent = `${WORD[c.decision]} · ${signCount(c)}/4 signs`;
   chip.hidden = false;
+  $("clock").textContent = fmt(c.start_sec);
+  $("clock").hidden = false;
   renderCard(c);
   renderTimeline();
-  renderList();
+  renderLog();
   updateTransport();
   video.src = url(c.stream_path);
-  video.play().catch(() => { /* error event starts the stand-in */ });
+  video.play().catch(() => { /* the error event starts the stand-in */ });
 }
 
-// No playable video (fixture tape, or the stream failed): hold the card for the clip's length.
+// No playable video (sample tape, or the stream failed): hold the card for the clip's length.
 function simulate() {
-  const c = cards[curIndex()];
+  const c = byId(curId);
   if (!c) return;
   const secs = Math.min(8, Math.max(2, c.end_sec - c.start_sec));
   const bar = $("simBar");
@@ -233,12 +309,11 @@ function simulate() {
 function clipDone() {
   clipFinished = true;
   if (!playing) { updateTransport(); return; }
-  const c = cards[curIndex()];
+  const c = byId(curId);
   if (c.decision === "come_off") {
     playing = false;
-    $("stopSigns").textContent = trueSigns(c).join(" · ") || "";
+    $("stopSigns").textContent = trueSigns(c).join(" · ");
     $("stop").hidden = false;
-    $("resume").focus();
     updateTransport();
     return;
   }
@@ -270,8 +345,7 @@ function toggle() {
   }
   playing = true;
   $("stop").hidden = true;
-  const i = curIndex();
-  if (i < 0) { show(0); return; }
+  if (curIndex() < 0) { show(0); return; }
   if (clipFinished) { next(); return; }
   if (!$("noVideo").hidden) simulate();
   else video.play().catch(() => {});
@@ -286,73 +360,129 @@ function resume() {
 
 function openCard(id) {
   const i = cards.findIndex((c) => c.id === id);
-  if (i >= 0) show(i);
+  if (i < 0) return;
+  show(i);
+  $("video").closest(".player").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function updateTransport() {
   const i = curIndex();
   const stopped = !$("stop").hidden;
-  $("play").textContent = playing ? (waiting ? "Waiting for cards…" : "Pause") : (stopped ? "Resume tape" : "Play tape");
+  $("play").textContent = playing ? (waiting ? "Waiting for moments…" : "Pause") : (stopped ? "Resume tape" : "Play tape");
   $("play").disabled = !cards.length;
   $("prev").disabled = i <= 0;
   $("next").disabled = i < 0 || i >= cards.length - 1;
-  $("pos").textContent = i >= 0 ? `Card ${i + 1} of ${cards.length}` : (cards.length ? `${cards.length} cards` : "");
+  $("pos").textContent = i >= 0 ? `${i + 1} / ${cards.length}` : "";
 }
 
-// --- questions -------------------------------------------------------------
+// --- search ----------------------------------------------------------------
+
+async function search(e) {
+  e.preventDefault();
+  const q = $("sq").value.trim();
+  if (!q) { clearSearch(); return; }
+  $("searchNote").textContent = "Searching…";
+  let r = null;
+  try { r = await api(`api/search?q=${encodeURIComponent(q)}`); } catch { /* network */ }
+  if (!r || !r.ok) {
+    $("searchNote").textContent = r && r.status === 409 ? "Nothing is indexed for this game yet." : "Search is unavailable right now.";
+    return;
+  }
+  matches = r.body.card_ids;
+  const where = r.fixture ? "in the sample captions" : "· NVIDIA Cosmos captions, searched on VAST";
+  $("searchNote").textContent = `${plural(matches.length, "match", "matches")} ${where}`;
+  $("searchChip").innerHTML = `Showing ${plural(matches.length, "match", "matches")} for “${esc(q)}”, best first · <button type="button" class="link" id="clearSearch">Clear</button>`;
+  $("searchChip").hidden = false;
+  renderTimeline();
+  renderLog();
+  if (matches.length) openCard(matches[0]);
+}
+
+function clearSearch() {
+  matches = null;
+  $("searchChip").hidden = true;
+  $("searchNote").textContent = "Plain-language search over every moment of the game · NVIDIA Cosmos captions, searched on VAST";
+  renderTimeline();
+  renderLog();
+}
+
+// --- agent -----------------------------------------------------------------
+
+const STEP = {
+  rule: (n) => `decision rule picked ${plural(n, "card")} from the visible signs`,
+  wandb: () => "one why sentence per card, checked in Python",
+  detections: (n) => `stored YOLO labels for ${plural(n, "moment")}`,
+  synthesize: () => "VAST summary over the game's captions",
+  agent_ask: (n) => `VAST agent over this game's segments → ${plural(n, "moment")}`,
+};
 
 async function loadQuestions() {
   let r = null;
   try { r = await api("api/questions"); } catch { /* keep the old list */ }
   if (!r || !r.ok) return;
   saved = r.body.questions;
-  $("saved").innerHTML = saved.map((q, i) =>
-    `<li><button type="button" class="qbtn" data-i="${i}">${esc(q.question)}</button></li>`).join("")
-    || `<li class="none">Saved answers appear once cards exist.</li>`;
+  $("chips").innerHTML = saved.map((q, i) => `<button type="button" data-i="${i}">${esc(q.question)}</button>`).join("");
+  renderSummary();
 }
 
-function firstCard(q) {
-  return q.card_ids.find((id) => cards.some((c) => c.id === id));
+function addBubble(text) {
+  const thread = $("thread");
+  thread.querySelector(".intro")?.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "exchange";
+  wrap.innerHTML = `<div class="bubble">${esc(text)}</div><div class="reply">Thinking…</div>`;
+  thread.appendChild(wrap);
+  thread.scrollTop = thread.scrollHeight;
+  return wrap;
 }
 
-function showAnswer(q) {
-  const box = $("answer");
-  const target = firstCard(q);
-  const card = target && cards.find((c) => c.id === target);
-  box.className = "answer";
-  box.hidden = false;
-  box.innerHTML = `
-    <p class="q">${esc(q.question)}</p>
-    <p class="a">${esc(q.answer)}</p>
-    <p class="meta">${esc(q.grounding)} · ${q.tools.map(esc).join(", ")}</p>
-    ${card ? `<button type="button" class="link" data-id="${esc(card.id)}">Open the moment at ${fmt(card.start_sec)}</button>` : ""}`;
-  if (target) openCard(target); // an answer seeks to its first card; none leaves the playhead
+async function renderReply(wrap, q) {
+  const ids = q.card_ids.filter((id) => byId(id));
+  const steps = q.tools.map((t) => `<li><code>${esc(t)}</code>${esc((STEP[t] || (() => ""))(ids.length))}</li>`).join("");
+  let body = `<p>${esc(q.answer)}</p>`;
+  if (q.grounding === "decision" && ids.length) {
+    const whys = await Promise.all(ids.map(whyOf));
+    if (whys.every((w) => w && w.sentence)) {
+      body = `<p>${plural(ids.length, "moment")} to look at:</p><ul class="hits">${ids.map((id, k) => {
+        const c = byId(id);
+        return `<li><span class="dot d-${c.decision}"></span><div><b class="mono">${fmt(c.start_sec)}</b> – ${esc(whys[k].sentence)}
+          <button type="button" class="link" data-id="${esc(id)}">Play clip</button></div></li>`;
+      }).join("")}</ul>`;
+    }
+  } else if (ids.length) {
+    body += `<p>${ids.map((id) => `<button type="button" class="link mono" data-id="${esc(id)}">${fmt(byId(id).start_sec)}</button>`).join(" · ")}</p>`;
+  }
+  wrap.innerHTML = `
+    <div class="bubble">${esc(q.question)}</div>
+    <div class="steps"><p class="lbl">Agent steps</p><ul>${steps}</ul></div>
+    <div class="reply">${body}
+      <p class="foot">${esc(q.grounding)} · ${q.tools.map(esc).join(", ")} · flagged for a trainer to review</p>
+    </div>`;
+  $("thread").scrollTop = $("thread").scrollHeight;
+  if (ids.length) openCard(ids[0]); // an answer opens its first card; none leaves the playhead
 }
 
-function showAnswerError(question, text) {
-  const box = $("answer");
-  box.className = "answer err";
-  box.hidden = false;
-  box.innerHTML = `<p class="q">${esc(question)}</p><p class="a">${esc(text)}</p>`;
+function replyError(wrap, text) {
+  const r = wrap.querySelector(".reply");
+  r.className = "reply err";
+  r.textContent = text;
 }
 
 async function ask(e) {
   e.preventDefault();
   const text = $("q").value.trim();
   if (!text) return;
+  $("q").value = "";
   $("askBtn").disabled = true;
-  const box = $("answer");
-  box.className = "answer";
-  box.hidden = false;
-  box.innerHTML = `<p class="q">${esc(text)}</p><p class="a">Asking…</p>`;
+  const wrap = addBubble(text);
   let r = null;
   try {
     r = await api("api/ask", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: text }) });
   } catch { /* network */ }
   $("askBtn").disabled = false;
-  if (r && r.ok) showAnswer(r.body);
-  else if (r && r.status === 409) showAnswerError(text, "Nothing is indexed for this game yet.");
-  else showAnswerError(text, "No answer right now. Try a saved question.");
+  if (r && r.ok) await renderReply(wrap, r.body);
+  else if (r && r.status === 409) replyError(wrap, "Nothing is indexed for this game yet.");
+  else replyError(wrap, "No answer right now. Try one of the saved questions.");
 }
 
 // --- wiring ----------------------------------------------------------------
@@ -364,23 +494,32 @@ $("next").addEventListener("click", () => { const i = curIndex(); if (i + 1 < ca
 $("prev").addEventListener("click", prev);
 $("resume").addEventListener("click", resume);
 $("askForm").addEventListener("submit", ask);
-$("sort").addEventListener("change", (e) => { sort = e.target.value; renderList(); });
+$("searchForm").addEventListener("submit", search);
+$("sq").addEventListener("search", () => { if (!$("sq").value) clearSearch(); });
+$("sort").addEventListener("change", (e) => { sort = e.target.value; renderLog(); });
 document.querySelector(".filters").addEventListener("click", (e) => {
   const b = e.target.closest("button");
-  if (b) { filter = b.dataset.f; renderList(); }
+  if (!b) return;
+  filter = b.dataset.f;
+  if (matches) clearSearch(); else renderLog();
 });
-for (const id of ["timeline", "items", "answer"]) {
+$("searchChip").addEventListener("click", (e) => { if (e.target.id === "clearSearch") clearSearch(); });
+for (const id of ["timeline", "rows", "thread"]) {
   $(id).addEventListener("click", (e) => {
     const b = e.target.closest("[data-id]");
     if (b) openCard(b.dataset.id);
   });
 }
-$("saved").addEventListener("click", (e) => {
-  const b = e.target.closest(".qbtn");
-  if (b) showAnswer(saved[+b.dataset.i]);
+$("rows").addEventListener("keydown", (e) => {
+  const tr = e.target.closest("tr[data-id]");
+  if (tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCard(tr.dataset.id); }
+});
+$("chips").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-i]");
+  if (b) renderReply(addBubble(saved[+b.dataset.i].question), saved[+b.dataset.i]);
 });
 document.addEventListener("keydown", (e) => {
-  if (e.target.closest("input, select, textarea, button")) return;
+  if (e.target.closest("input, select, textarea, button, tr")) return;
   if (e.key === " ") { e.preventDefault(); toggle(); }
   else if (e.key === "ArrowRight") $("next").click();
   else if (e.key === "ArrowLeft") prev();

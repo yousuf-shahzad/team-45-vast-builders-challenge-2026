@@ -39,6 +39,7 @@ Does:
 - Read stored YOLO labels for one segment via `GET /api/v1/videos/detections?source=` (videos skill). Return the detections schema: label counts, or `available: false`. Do not invent a label. Do not return box coordinates.
 - `POST /api/v1/videos/synthesize` for this `original_video`, with the system prompt in the spec.
 - `POST /api/v1/agent/ask` with `original_video` set to this clip. Return the answer and the evidence segments so Lane D can fill `card_ids`.
+- `POST /api/v1/search` with the upload tag `off-ice-flag`. Return segment sources, best first.
 - Every VAST HTTP call for this app goes through this module. Do not call `POST /api/v1/agent/search-and-answer`. Do not call a GPU host.
 
 Skills: `.cursor/skills/retrieval/login`, `.cursor/skills/retrieval/videos`, `.cursor/skills/retrieval/agent-qa`, `.cursor/skills/ingest/upload-video`.
@@ -133,6 +134,7 @@ Lane D registers these and they must keep these shapes:
 | `GET /api/cards/{id}/why` | Cached why schema. Lane B phrased it at tape build |
 | `GET /api/questions` | Lane D |
 | `POST /api/ask` | Lane D router in `questions.py` |
+| `GET /api/search` | Lane D maps Lane A's search hits to cards by source |
 | `GET /api/eval` | Lane D |
 
 Until `OFF_ICE_ORIGINAL_VIDEO` is set, these may return the fixtures: tape (`video_id` `fixture-period`), why, detections, and questions. Set `X-Off-Ice-Fixture: 1` when that happens. Live ask against the fixture does not call VAST or Weights & Biases. Do not present fixture cards as the judged clip.

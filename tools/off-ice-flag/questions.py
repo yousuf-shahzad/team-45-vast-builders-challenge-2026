@@ -236,6 +236,26 @@ def ask(state, text):
     return _q("live", text, _fit(answer), overlap_ids(state.cards, spans), "live", "clip", ["agent_ask"])
 
 
+STOPWORDS = {"the", "and", "into", "with", "for", "was", "are", "from", "that", "this", "his", "her", "who", "what"}
+
+
+def search(state, query):
+    """Cards matching a plain-language search, best match first. Raises ValueError, NotReady, Upstream."""
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("empty query")
+    if state.tape["status"] == "missing_clip":
+        raise NotReady("missing_clip")
+    if state.fixture:  # no VAST call: rank sample captions by shared words
+        words = [w for w in re.findall(r"[a-z]+", _norm(query)) if len(w) > 2 and w not in STOPWORDS]
+        scored = [(sum(w in _norm(c["caption"]) for w in words), c["id"]) for c in state.cards]
+        ids = [cid for n, cid in sorted(scored, key=lambda x: -x[0]) if n]
+    else:  # match by source only: time overlap would pull in other videos' segments
+        by_source = {c.get("source"): c["id"] for c in state.cards}
+        ids = list(dict.fromkeys(by_source[s] for s in vss_client.search(query) if s in by_source))
+    return {"query": query, "card_ids": ids}
+
+
 # --- state -------------------------------------------------------------------
 
 def _load(name):

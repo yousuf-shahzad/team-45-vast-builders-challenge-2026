@@ -283,6 +283,20 @@ def agent_ask(question, original_video):
     return answer.strip(), [span(r) for r in _rows(res.get("evidence"))]
 
 
+SEARCH_TAG = "off-ice-flag"  # upload() tags the game with it, so search stays on our footage
+
+
+def search(query, top_k=50):
+    """VAST hybrid search (caption text + visual vectors) over our uploads -> segment sources, best first."""
+    res = _json(
+        "/api/v1/search",
+        method="POST",
+        payload={"query": query, "top_k": top_k, "llm_top_n": 0, "min_similarity": 0.25,
+                 "tags": [SEARCH_TAG], "include_public": True},
+    )
+    return [s for s in (_first(r, ("source",)) for r in _rows(res, ("results",))) if s]
+
+
 def ingest_prompt():
     """The custom prompt sent on upload. The contracts copy wins when both exist."""
     for p in (HERE.parent.parent / "contracts" / "ingest_prompt.txt", HERE / "ingest_prompt.txt"):
@@ -323,7 +337,7 @@ def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
     if path.stat().st_size > cap_mb * 1024 * 1024:
         raise ValueError(f"file is over the {cap_mb:.0f} MB upload cap. Re-encode it: {fit_hint(path, cap_mb)}")
     fields = {"is_public": "false", "scenario": "nhl", "custom_prompt": ingest_prompt(),
-              "camera_id": "rink_cam-1", "location": "rink", "tags": "off-ice-flag"}
+              "camera_id": "rink_cam-1", "location": "rink", "tags": SEARCH_TAG}
     boundary = uuid.uuid4().hex
     parts = []
     for k, v in fields.items():

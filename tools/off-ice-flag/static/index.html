@@ -6,84 +6,158 @@
 <title>Off-ice Flag</title>
 <!-- Served under Ingress /app: relative URLs only work from /app/, so add the slash. -->
 <script>if (!location.pathname.endsWith("/")) location.replace(location.pathname + "/" + location.search);</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600&family=Oswald:wght@500;600&display=swap">
 <link rel="stylesheet" href="style.css">
 <script src="app.js" defer></script>
 </head>
 <body>
+<div class="wrap">
+
 <header class="top">
   <div class="brand">
-    <span class="logo" aria-hidden="true"></span>
-    <h1>Off-ice Flag</h1>
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.9 7.5-9.5V6L12 3Z"/><path d="m8.8 12.2 2.2 2.2 4.2-4.6" stroke-linecap="round"/></svg>
+    </span>
+    <div>
+      <h1>Off-ice Flag</h1>
+      <p class="sub">Hit review for hockey trainers</p>
+    </div>
   </div>
-  <div class="status">
-    <span id="fixture" class="badge" hidden title="Fixture cards, not the judged clip">Sample data</span>
-    <span id="status" class="pill" role="status">Loading tape…</span>
+  <div class="meta">
+    <span id="fixture" class="tag ghost" hidden title="Fixture cards, not the judged clip">Sample data</span>
+    <span id="game" class="tag ghost" hidden></span>
+    <span id="status" class="tag status" role="status">Loading…</span>
   </div>
 </header>
 
-<main class="grid">
-  <section class="stage" aria-label="Replay">
-    <div class="screen">
-      <video id="video" muted playsinline preload="auto"></video>
-      <div id="noVideo" class="novideo" hidden>
-        <p>No video for this card</p>
-        <div class="sim"><span id="simBar"></span></div>
+<section class="panel search">
+  <form id="searchForm" class="searchrow" role="search">
+    <label class="searchbox">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5" stroke-linecap="round"/></svg>
+      <input id="sq" type="search" placeholder="hits into the boards" aria-label="Search footage" autocomplete="off">
+    </label>
+    <button class="btn primary" type="submit">Search footage</button>
+  </form>
+  <p id="searchNote" class="note">Plain-language search over every moment of the game · NVIDIA Cosmos captions, searched on VAST</p>
+</section>
+
+<div class="layout">
+  <div class="main">
+
+    <section class="panel player" aria-label="Replay">
+      <div class="screen">
+        <video id="video" muted playsinline preload="auto"></video>
+        <div id="noVideo" class="novideo" hidden>
+          <p>No video for this card</p>
+          <div class="sim"><span id="simBar"></span></div>
+        </div>
+        <span id="chip" class="chip" hidden></span>
+        <span id="clock" class="clockbadge" hidden></span>
+        <div id="stop" class="stop" hidden>
+          <p class="stop-word">Come off</p>
+          <p id="stopSigns" class="stop-signs"></p>
+          <button id="resume" class="btn primary" type="button">Resume tape</button>
+        </div>
+        <div id="empty" class="empty"><p id="emptyText">Loading…</p></div>
       </div>
-      <span id="chip" class="chip" hidden></span>
-      <div id="stop" class="stop" hidden>
-        <p class="stop-word">Come off</p>
-        <p id="stopSigns" class="stop-signs"></p>
-        <button id="resume" class="btn primary" type="button">Resume tape</button>
+      <div class="transport">
+        <button id="prev" class="btn icon" type="button" aria-label="Previous card">&#8249;</button>
+        <button id="play" class="btn primary" type="button">Play tape</button>
+        <button id="next" class="btn icon" type="button" aria-label="Next card">&#8250;</button>
+        <span id="pos" class="pos mono"></span>
       </div>
-      <div id="empty" class="empty"><p id="emptyText">Loading…</p></div>
-    </div>
-    <div class="transport">
-      <button id="prev" class="btn icon" type="button" aria-label="Previous card">&#8249;</button>
-      <button id="play" class="btn primary" type="button">Play tape</button>
-      <button id="next" class="btn icon" type="button" aria-label="Next card">&#8250;</button>
-      <span id="pos" class="pos"></span>
-    </div>
-    <div class="track">
+      <div id="card" class="cardview" aria-live="polite" hidden></div>
+    </section>
+
+    <section class="panel">
+      <div class="phead">
+        <span class="kicker">Flagged moments across the game</span>
+        <div class="legend">
+          <span><i class="mk-icon d-come_off"></i>Come off</span>
+          <span><i class="mk-icon d-watch"></i>Watch</span>
+          <span><i class="mk-icon d-play_on"></i>Play on</span>
+        </div>
+      </div>
       <div id="timeline" class="timeline" aria-label="Cards on the game clock"></div>
-      <div class="axis"><span>0:00</span><span id="durLabel"></span></div>
-    </div>
-  </section>
+      <div id="axis" class="axis"></div>
+    </section>
 
-  <aside class="panel card" id="card" aria-live="polite">
-    <p class="hint">Press <b>Play tape</b>, or pick a card.</p>
-  </aside>
+    <div class="pair">
+      <section class="panel">
+        <div class="phead"><h2>Game summary</h2><span class="muted small">Auto-written</span></div>
+        <div class="stats">
+          <div class="stat"><b id="nCome" class="c-come_off">0</b><span>come off</span></div>
+          <div class="stat"><b id="nWatch" class="c-watch">0</b><span>watch</span></div>
+          <div class="stat"><b id="nPlay" class="c-play_on">0</b><span>play on</span></div>
+        </div>
+        <p id="recap" class="recap"></p>
+        <p id="reviewTime" class="muted small"></p>
+      </section>
 
-  <section class="panel list" aria-label="Tape">
-    <div class="list-head">
-      <h2>Tape</h2>
-      <label class="sort">Sort
-        <select id="sort">
-          <option value="time">Game clock</option>
-          <option value="signs">Most visible signs</option>
-        </select>
-      </label>
+      <section class="panel">
+        <div class="phead">
+          <h2>How we tested it</h2>
+          <a class="small" href="https://github.com/yousuf-shahzad/team-45-vast-builders-challenge-2026/blob/main/docs/EVAL.md" target="_blank" rel="noopener">Method in EVAL.md</a>
+        </div>
+        <dl id="evalRows" class="rows"></dl>
+        <p id="evalNote" class="muted small"></p>
+      </section>
     </div>
-    <div class="filters" role="group" aria-label="Filter by decision">
-      <button type="button" data-f="all" aria-pressed="true">All</button>
-      <button type="button" data-f="come_off" aria-pressed="false">Come off</button>
-      <button type="button" data-f="watch" aria-pressed="false">Watch</button>
-      <button type="button" data-f="play_on" aria-pressed="false">Play on</button>
-    </div>
-    <ol id="items" class="items"></ol>
-  </section>
 
-  <section class="panel ask" aria-label="Questions">
-    <h2>Ask about this game</h2>
-    <form id="askForm" class="askform">
-      <input id="q" type="text" placeholder="Who should have come off?" autocomplete="off" aria-label="Question">
+    <section class="panel log">
+      <div class="phead">
+        <h2>Event log</h2>
+        <div class="logtools">
+          <div class="filters" role="group" aria-label="Filter by decision">
+            <button type="button" data-f="all" aria-pressed="true">All</button>
+            <button type="button" data-f="come_off" aria-pressed="false">Come off</button>
+            <button type="button" data-f="watch" aria-pressed="false">Watch</button>
+            <button type="button" data-f="play_on" aria-pressed="false">Play on</button>
+          </div>
+          <select id="sort" aria-label="Sort">
+            <option value="time">Game clock</option>
+            <option value="signs">Most visible signs</option>
+          </select>
+        </div>
+      </div>
+      <p id="searchChip" class="searchchip" hidden></p>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Time</th><th>Call</th><th>What happened</th><th class="col-signs">Signs</th><th><span class="sr">Clip</span></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <aside class="panel agent" aria-label="Ask the agent">
+    <div class="phead agent-head">
+      <h2>Ask the agent</h2>
+      <span class="muted small">Flags moments for review</span>
+    </div>
+    <div id="thread" class="thread" aria-live="polite">
+      <p class="muted small intro">Ask about a hit, a sign, or the whole game. Answers come from the cards and from VAST, and link back to the clip.</p>
+    </div>
+    <div id="chips" class="chips"></div>
+    <form id="askForm" class="askrow">
+      <input id="q" type="text" placeholder="Ask about this game…" autocomplete="off" aria-label="Question">
       <button id="askBtn" class="btn primary" type="submit">Ask</button>
     </form>
-    <div id="answer" class="answer" hidden></div>
-    <h3>Saved questions</h3>
-    <ul id="saved" class="saved"></ul>
-  </section>
-</main>
+  </aside>
+</div>
 
-<footer class="foot">Flags come from what the camera shows. A trainer makes the call.</footer>
+<footer class="built">
+  <span class="muted">Built with</span>
+  <span class="tag ghost">VAST Data · video storage, search, agent</span>
+  <span class="tag ghost">NVIDIA Cosmos · segment captions</span>
+  <span class="tag ghost">Weights &amp; Biases · signs and why sentences</span>
+  <span class="tag ghost">CoreWeave · GPUs</span>
+  <span class="tag ghost">Cursor · built with</span>
+</footer>
+<p class="fineprint">Flags come from what the camera shows. A trainer makes the call.</p>
+
+</div>
 </body>
 </html>
