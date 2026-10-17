@@ -90,7 +90,7 @@ docs/EVAL.md               evaluation procedure
 
 ### Locally, against fixtures
 
-If `OFF_ICE_ORIGINAL_VIDEO` is unset, the app serves the four sample cards in [contracts/fixtures/](contracts/fixtures/) and calls neither VAST nor W&B. Every API response then carries the `X-Off-Ice-Fixture: 1` header.
+If nothing is loaded in either tab (`OFF_ICE_CHUNKS` and `OFF_ICE_ORIGINAL_VIDEO` unset), the app serves the four sample cards in [contracts/fixtures/](contracts/fixtures/) and calls neither VAST nor W&B. Every API response then carries the `X-Off-Ice-Fixture: 1` header.
 
 ```bash
 cd tools/off-ice-flag
@@ -110,12 +110,13 @@ python test_offline.py
 ```bash
 cd tools/off-ice-flag
 python vss_client.py login
-python vss_client.py upload game.mp4       # prints an ffmpeg re-encode command if the file is over the cap; asks before sending
-python vss_client.py find game             # gets the original_video URI once indexed
-python vss_client.py segments <original_video>
+python vss_client.py split game.mp4              # lossless parts under the 100 MB upload cap (stream copy)
+python vss_client.py upload game_part_*.mp4      # one confirmation, then uploads every part
+python vss_client.py find game_part              # original_video URIs once indexed
+python vss_client.py segments <original_video>   # check captions and segment counts
 ```
 
-Set `OFF_ICE_ORIGINAL_VIDEO` to that URI. The app also reads `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`, `WANDB_API_KEY`, optional `WANDB_INFERENCE_BASE`, and `PORT`.
+Then open the app's **Split game** tab, click **Load videos**, and tick the parts. They play in file-name order on one game clock. The **Whole video** tab takes a single upload under the cap. To make a load survive pod restarts, set `OFF_ICE_CHUNKS` (comma-separated part URIs, in order) or `OFF_ICE_ORIGINAL_VIDEO` in the Secret. The app also reads `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`, `WANDB_API_KEY`, optional `WANDB_INFERENCE_BASE`, and `PORT`.
 
 ### Deploy
 
@@ -134,6 +135,9 @@ Deploy to the `team-45` namespace with the `deploy-app-no-registry` skill. It us
 | GET | `/api/questions` | The six saved questions and their answers |
 | POST | `/api/ask` | `{ "question": "..." }` → one live answer |
 | GET | `/api/search?q=` | VAST hybrid search over this game, mapped to cards |
+| GET | `/api/sources` | What the Split game and Whole video tabs have loaded |
+| POST | `/api/sources/{chunks\|whole}` | `{ "videos": [...] }` → load a tab |
+| GET | `/api/library` | Indexed uploads in VAST, for the loader |
 | GET | `/api/eval` | Match score against the eight hand labels |
 
 Schemas for every response are in [contracts/](contracts/).

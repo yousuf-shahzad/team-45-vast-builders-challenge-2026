@@ -32,7 +32,8 @@ Owns:
 Does:
 
 - Log in to VAST with the retrieval login skill. Never log the token.
-- Upload is a confirmed step, not an automatic one. One file per game; VAST segments it. The file must be under the live upload cap (`max_upload_size_mb`); over it, print the re-encode command. Send `scenario=nhl` and `custom_prompt` from the contracts file.
+- Upload is a confirmed step, not an automatic one. Every file must be under the live upload cap (`max_upload_size_mb`). A full game is split losslessly into parts (`split`, stream copy) and each part uploaded; one confirmation covers the batch. Send `scenario=nhl` and `custom_prompt` from the contracts file.
+- List the team's indexed uploads from Explore for the page's loader (`library`).
 - Return the segments indexed so far for that `original_video`, sorted by start time, with the status (`ready`, `indexing`, `missing_clip`).
 - Map a segment to the fields Lane B needs: `id`, `source`, `start_sec`, `end_sec`, `caption`.
 - Proxy `GET /api/segments/{id}/stream` to the VSS stream URL. The JWT stays on the server.
@@ -135,9 +136,13 @@ Lane D registers these and they must keep these shapes:
 | `GET /api/questions` | Lane D |
 | `POST /api/ask` | Lane D router in `questions.py` |
 | `GET /api/search` | Lane D maps Lane A's search hits to cards by source |
+| `GET /api/sources`, `POST /api/sources/{source}` | Lane D: which videos each tab (Split game, Whole video) has loaded |
+| `GET /api/library` | Lane A lists indexed uploads for the loader |
 | `GET /api/eval` | Lane D |
 
-Until `OFF_ICE_ORIGINAL_VIDEO` is set, these may return the fixtures: tape (`video_id` `fixture-period`), why, detections, and questions. Set `X-Off-Ice-Fixture: 1` when that happens. Live ask against the fixture does not call VAST or Weights & Biases. Do not present fixture cards as the judged clip.
+Every game route takes `?source=chunks|whole` for the tab. A Split game tab stitches its parts onto one clock (Lane D's builder) and prefixes card ids with the part (`p02-seg-014`).
+
+Until some tab has videos loaded, these may return the fixtures: tape (`video_id` `fixture-period`), why, detections, and questions. Set `X-Off-Ice-Fixture: 1` when that happens. Live ask against the fixture does not call VAST or Weights & Biases. Do not present fixture cards as the judged clip.
 
 ## Changing a contract
 

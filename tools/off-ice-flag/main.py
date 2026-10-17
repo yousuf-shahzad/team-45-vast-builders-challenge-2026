@@ -1,4 +1,8 @@
-"""Lane D: FastAPI wiring only (contract version 2). Logic lives in the lane modules."""
+"""Lane D: FastAPI wiring only (contract version 2). Logic lives in the lane modules.
+
+Every /api route takes an optional `source` query param: `chunks` (the Split game tab)
+or `whole` (the Whole video tab). Without it, the default tab is used.
+"""
 
 import os
 import threading
@@ -54,7 +58,7 @@ def _not_ready(request, exc):
 @app.middleware("http")
 async def _fixture_header(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/api/") and not os.environ.get("OFF_ICE_ORIGINAL_VIDEO", "").strip():
+    if request.url.path.startswith("/api/") and questions.is_fixture():
         response.headers["X-Off-Ice-Fixture"] = "1"
     return response
 
@@ -64,14 +68,36 @@ def health():
     return {"ok": True}
 
 
+@app.get("/api/sources")
+def get_sources():
+    return questions.sources()
+
+
+@app.post("/api/sources/{source}")
+async def load_source(source: str, request: Request):
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    try:
+        return questions.load(source, body.get("videos") if isinstance(body, dict) else None)
+    except ValueError as e:
+        return _err(400, error=str(e))
+
+
+@app.get("/api/library")
+def library():
+    return {"videos": vss_client.library()}
+
+
 @app.get("/api/tape")
-def tape():
-    return questions.current_state().tape
+def tape(source: str = None):
+    return questions.current_state(source).tape
 
 
 @app.get("/api/segments/{card_id}/stream")
-def stream(card_id: str, request: Request):
-    state = questions.current_state()
+def stream(card_id: str, request: Request, source: str = None):
+    state = questions.current_state(source)
     card = state.card(card_id)
     if card is None or state.fixture:
         return _err(404, error="unknown card" if card is None else "fixture has no video")
@@ -80,8 +106,8 @@ def stream(card_id: str, request: Request):
 
 
 @app.get("/api/segments/{card_id}/detections")
-def detections(card_id: str):
-    state = questions.current_state()
+def detections(card_id: str, source: str = None):
+    state = questions.current_state(source)
     if state.card(card_id) is None:
         return _err(404, error="unknown card")
     d = state.detections.get(card_id)
@@ -89,8 +115,8 @@ def detections(card_id: str):
 
 
 @app.get("/api/cards/{card_id}/why")
-def why(card_id: str):
-    state = questions.current_state()
+def why(card_id: str, source: str = None):
+    state = questions.current_state(source)
     if state.card(card_id) is None:
         return _err(404, error="unknown card")
     w = state.whys.get(card_id)
@@ -98,12 +124,12 @@ def why(card_id: str):
 
 
 @app.get("/api/questions")
-def saved():
-    return {"contract_version": 2, "questions": questions.current_state().questions}
+def saved(source: str = None):
+    return {"contract_version": 2, "questions": questions.current_state(source).questions}
 
 
 @app.post("/api/ask")
-async def ask(request: Request):
+async def ask(request: Request, source: str = None):
     try:
         body = await request.json()
     except ValueError:
@@ -111,19 +137,19 @@ async def ask(request: Request):
     text = body.get("question") if isinstance(body, dict) else None
     if not isinstance(text, str) or not text.strip():
         return _err(400, error="empty question")
-    return await run_in_threadpool(lambda: questions.ask(questions.current_state(), text))
+    return await run_in_threadpool(lambda: questions.ask(questions.current_state(source), text))
 
 
 @app.get("/api/search")
-def search(q: str = ""):
+def search(q: str = "", source: str = None):
     if not q.strip():
         return _err(400, error="empty query")
-    return questions.search(questions.current_state(), q)
+    return questions.search(questions.current_state(source), q)
 
 
 @app.get("/api/eval")
-def score():
-    state = questions.current_state()
+def score(source: str = None):
+    state = questions.current_state(source)
     if not state.ready:
         raise questions.NotReady(state.tape["status"])
     labels = evaluation.load_labels(questions.FIXTURES, state.fixture)

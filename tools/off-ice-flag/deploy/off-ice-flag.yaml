@@ -9,8 +9,9 @@
 #   kubectl -n team-45 create secret generic off-ice-flag-creds \
 #     --from-literal=VSS_URL="$(get INGRESS_URL)" --from-literal=VSS_USERNAME="$(get USERNAME)" \
 #     --from-literal=VSS_PASSWORD="$(get PASSWORD)" --from-literal=WANDB_API_KEY="$WANDB_API_KEY" \
+#     --from-literal=OFF_ICE_CHUNKS="<part_000 uri>,<part_001 uri>,..." \
 #     --from-literal=OFF_ICE_ORIGINAL_VIDEO="" \
-#     --dry-run=client -o yaml | kubectl apply -f -      # empty OFF_ICE_ORIGINAL_VIDEO = fixtures
+#     --dry-run=client -o yaml | kubectl apply -f -      # both empty = fixtures; the page's Load videos also works
 #   kubectl -n team-45 apply -f deploy/off-ice-flag.yaml
 #   kubectl -n team-45 rollout restart deploy/off-ice-flag   # after any ConfigMap/Secret change
 #

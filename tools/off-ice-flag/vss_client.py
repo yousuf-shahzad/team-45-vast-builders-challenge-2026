@@ -6,7 +6,8 @@ leaves this module. Does not import decision.py.
 
 CLI (run on the VM, where the team config is):
     python vss_client.py login
-    python vss_client.py upload <game.mp4>          # one file, any length; VAST segments it. Asks first
+    python vss_client.py split <game.mp4>           # lossless parts under the upload cap
+    python vss_client.py upload <file> [<file> ...] # asks once, then uploads each
     python vss_client.py find <filename-part>       # find original_video after upload
     python vss_client.py segments <original_video>  # raw + mapped rows, to check field names
 """
@@ -284,6 +285,8 @@ def agent_ask(question, original_video):
 
 
 SEARCH_TAG = "off-ice-flag"  # upload() tags the game with it, so search stays on our footage
+UPLOAD_FIELDS = {"is_public": "false", "scenario": "nhl", "camera_id": "rink_cam-1", "location": "rink",
+                 "tags": SEARCH_TAG}
 
 
 def search(query, top_k=50):
@@ -321,16 +324,21 @@ def _ffmpeg():
         return shutil.which("ffmpeg")
 
 
+def _duration(exe, path):
+    """Seconds, read from ffmpeg's own banner (imageio-ffmpeg ships no ffprobe)."""
+    probe = subprocess.run([exe, "-i", str(path)], capture_output=True, text=True).stderr
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe)
+    return int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else None
+
+
 def fit_hint(path, cap_mb):
     """An ffmpeg command that re-encodes a long game under the cap, so it stays one upload."""
     exe = _ffmpeg()
     if not exe:
-        return "no ffmpeg found: run `pip install imageio-ffmpeg`, then run this upload command again"
-    probe = subprocess.run([exe, "-i", str(path)], capture_output=True, text=True).stderr
-    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe)
-    if not m:
+        return "no ffmpeg found: run `pip install imageio-ffmpeg`, then run this command again"
+    duration = _duration(exe, path)
+    if not duration:
         return f"could not read the duration of {path.name}"
-    duration = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
     kbps = int(cap_mb * 8000 * 0.92 / duration)  # video only; audio is dropped (-an)
     # ponytail: rough bitrate ladder for a wide rink camera; Cosmos samples frames, so fps can drop first.
     height, fps = (720, 30) if kbps >= 1500 else (540, 15) if kbps >= 500 else (360, 15)
@@ -339,18 +347,46 @@ def fit_hint(path, cap_mb):
             f"\n  # {duration / 60:.0f} min at {kbps} kbps, {height}p {fps} fps")
 
 
+def split(path, cap_mb):
+    """Cut a long game into parts under the cap by stream copy: no re-encode, no quality loss.
+
+    Returns the part files in game order. Cuts land on keyframes, so a part can run long;
+    the target shrinks until every part fits.
+    """
+    path = Path(path)
+    exe = _ffmpeg()
+    if not exe:
+        raise RuntimeError("no ffmpeg found: run `pip install imageio-ffmpeg`")
+    duration = _duration(exe, path)
+    if not duration:
+        raise RuntimeError(f"could not read the duration of {path.name}")
+    cap_bytes = cap_mb * 1024 * 1024
+    stem = f"{path.stem}_part_"
+    for fill in (0.85, 0.6, 0.4):
+        for old in path.parent.glob(f"{stem}*.mp4"):
+            old.unlink()
+        part_sec = max(30, int(duration * cap_bytes * fill / path.stat().st_size))
+        subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", "0:v:0", "-an",
+                        "-c", "copy", "-f", "segment", "-segment_time", str(part_sec), "-reset_timestamps", "1",
+                        str(path.with_name(stem + "%03d.mp4"))], check=True)
+        parts = sorted(path.parent.glob(f"{stem}*.mp4"))
+        if all(q.stat().st_size <= cap_bytes for q in parts):
+            return parts
+    raise RuntimeError("a part is still over the cap; the video has very long keyframe gaps")
+
+
 def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
     """Multipart upload with scenario=nhl and the contract prompt. Returns the API response.
 
-    One file per game: the DataEngine segmenter cuts it into ~5 s segments itself.
+    The DataEngine segmenter cuts each file into ~5 s segments itself. A game over the
+    cap goes up as split() parts, one call each.
     """
     path = Path(path)
     if path.suffix.lower() not in VIDEO_EXTS:
         raise ValueError(f"extension {path.suffix} not allowed")
     if path.stat().st_size > cap_mb * 1024 * 1024:
         raise ValueError(f"file is over the {cap_mb:.0f} MB upload cap. Re-encode it: {fit_hint(path, cap_mb)}")
-    fields = {"is_public": "false", "scenario": "nhl", "custom_prompt": ingest_prompt(),
-              "camera_id": "rink_cam-1", "location": "rink", "tags": SEARCH_TAG}
+    fields = dict(UPLOAD_FIELDS, custom_prompt=ingest_prompt())
     boundary = uuid.uuid4().hex
     parts = []
     for k, v in fields.items():
@@ -366,43 +402,63 @@ def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
         return json.load(r)
 
 
-def find(name_part):
-    """Explore entries whose filename contains name_part -> [(original_video, filename, clips)]."""
+def library():
+    """Every fully indexed upload in the team archive, as the app's loader shows it."""
     out, offset = [], 0
     while True:
         page = _json("/api/v1/videos/explore", params={"scope": "all", "limit": 100, "offset": offset})
         rows = _rows(page)
         for r in rows:
-            if name_part.lower() in str(r.get("filename", "")).lower():
-                out.append((r.get("original_video"), r.get("filename"), len(r.get("timeline") or [])))
+            meta = r.get("metadata") if isinstance(r.get("metadata"), dict) else {}
+            camera = _first(r, ("camera_id",)) or _first(meta, ("camera_id",)) or ""
+            location = _first(r, ("location",)) or _first(meta, ("location",)) or ""
+            out.append({"original_video": r.get("original_video"), "filename": r.get("filename") or "",
+                        "clips": len(r.get("timeline") or []),
+                        "ours": camera == UPLOAD_FIELDS["camera_id"] or location == UPLOAD_FIELDS["location"]})
         offset += 100
         total = page.get("total", 0) if isinstance(page, dict) else 0
         if not rows or offset >= total:
-            return out
+            return [v for v in out if v["original_video"]]
+
+
+def find(name_part):
+    return [v for v in library() if name_part.lower() in v["filename"].lower()]
 
 
 def _cli(argv):
-    cmd, arg = (argv + [None, None])[:2]
+    cmd, args = (argv[0] if argv else None), argv[1:]
     if cmd == "login":
         _login()
         print("login ok")
-    elif cmd == "upload" and arg:
-        p = Path(arg)
+    elif cmd == "split" and args:
+        parts = split(Path(args[0]), upload_cap_mb())
+        for q in parts:
+            print(f"{q}\t{q.stat().st_size / 1e6:.0f} MB")
+        print(f"Next: python vss_client.py upload {Path(args[0]).stem}_part_*.mp4")
+    elif cmd == "upload" and args:
+        files = [Path(a) for a in args]
         cap = upload_cap_mb()
-        if p.stat().st_size > cap * 1024 * 1024:
-            sys.exit(f"{p.name} is {p.stat().st_size / 1e6:.0f} MB, over the {cap:.0f} MB cap. Re-encode it:\n"
-                     f"  {fit_hint(p, cap)}")
-        print(f"Upload {p.name} ({p.stat().st_size / 1e6:.1f} MB of {cap:.0f} MB), scenario=nhl, custom_prompt "
-              f"({len(ingest_prompt())} chars), private. Type yes to send:", end=" ")
+        big = [q for q in files if q.stat().st_size > cap * 1024 * 1024]
+        if big:
+            sys.exit(f"{big[0].name} is over the {cap:.0f} MB cap. Split it losslessly into parts:\n"
+                     f"  python vss_client.py split {big[0]}\nor re-encode it into one smaller file:\n"
+                     f"  {fit_hint(big[0], cap)}")
+        total = sum(q.stat().st_size for q in files) / 1e6
+        print(f"Upload {len(files)} file(s), {total:.0f} MB in all, scenario=nhl, custom_prompt "
+              f"({len(ingest_prompt())} chars), private:")
+        for q in files:
+            print(f"  {q.name}\t{q.stat().st_size / 1e6:.0f} MB")
+        print("Type yes to send:", end=" ")
         if input().strip().lower() != "yes":
             sys.exit("not sent")
-        res = upload(p, cap)
-        print(json.dumps(res, indent=2))
-        print(f"Next: python vss_client.py find {p.stem}  (once indexed), then set OFF_ICE_ORIGINAL_VIDEO")
-    elif cmd == "find" and arg:
-        for row in find(arg):
-            print(*row, sep="\t")
-    elif cmd == "segments" and arg:
+        for q in files:
+            print(q.name, "->", upload(q, cap).get("object_key"), flush=True)
+        print("Next: once indexed, open the app's Split game or Whole video tab and load them.")
+    elif cmd == "find" and args:
+        for v in find(args[0]):
+            print(v["original_video"], v["filename"], v["clips"], sep="\t")
+    elif cmd == "segments" and args:
+        arg = args[0]
         raw = _json("/api/v1/tools/segments", params={"original_video": arg, "limit": 5000})
         first = _rows(raw)[:1]
         print("raw first row keys:", sorted(first[0]) if first else "none")

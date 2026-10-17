@@ -1,4 +1,4 @@
-"""Lane D: tape build + cache, saved questions, and the live ask router (contract version 2).
+"""Lane D: tape build + cache per tab, saved questions, and the live ask router (contract version 2).
 
 Calls vss_client (VAST) and decision (W&B). Opens no HTTP client of its own.
 """
@@ -40,6 +40,7 @@ class State:
     detections: dict = field(default_factory=dict)  # card id -> detections object
     questions: list = field(default_factory=list)
     recap: tuple = None                             # (answer, card_ids)
+    parts: list = field(default_factory=list)       # (original_video, game-clock offset, length) in game order
 
     @property
     def ready(self):
@@ -184,13 +185,46 @@ def recap_ok(answer):
     return bool(answer) and not decision.BANNED.search(answer) and not RECAP_DECISION.search(answer)
 
 
-def _recap(state, original_video, question):
-    answer, spans = vss_client.synthesize(original_video, question)
-    if not recap_ok(answer):
-        raise Upstream("recap failed the word checks")
-    return _fit(answer), overlap_ids(state.cards, spans) if spans else [c["id"] for c in state.cards]
+def no_banned(answer):
+    return bool(answer) and not decision.BANNED.search(answer)
 
 
+def clock(sec):
+    s = int(sec)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def clip_answer(state, call, check, whole_part_if_no_spans):
+    """Run a VAST clip call (synthesize or agent ask) on every part of the game, in parallel.
+
+    Answers that pass `check` are joined in game order, each with its clock range when the
+    game has several parts. Part-local evidence times are shifted onto the game clock.
+    """
+    def run(part):
+        try:
+            return call(part[0])
+        except vss_client.UpstreamError as e:
+            print(f"clip call on {part[0]}: {e}", flush=True)
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(run, state.parts))
+    texts, spans = [], []
+    for (ov, off, dur), res in zip(state.parts, results):
+        if not res or not check(res[0]):
+            continue
+        answer, part_spans = res
+        texts.append(answer if len(state.parts) == 1 else f"{clock(off)}–{clock(off + dur)}: {answer}")
+        if part_spans:
+            spans += [(src, None if a is None else a + off, None if b is None else b + off) for src, a, b in part_spans]
+        elif whole_part_if_no_spans:
+            spans.append((None, off, off + dur))
+    if not texts:
+        raise Upstream("no part of the game gave a usable answer")
+    return _fit(" ".join(texts)), overlap_ids(state.cards, spans)
+
+
+RECAP_QUESTION = "What happens in this clip?"
 SAVED = (
     ("who-comes-off", "Who should have come off?"),
     ("why-come-off", "Why is that a come off?"),
@@ -204,7 +238,7 @@ def saved_questions(state):
     out = [q for qid, text in SAVED if (q := decision_answer(state, text, qid, "saved"))]
     if state.recap:
         answer, ids = state.recap
-        out.append(_q("clip-recap", "What happens in this clip?", answer, ids, "saved", "clip", ["synthesize"]))
+        out.append(_q("clip-recap", RECAP_QUESTION, answer, ids, "saved", "clip", ["synthesize"]))
     return out
 
 
@@ -226,14 +260,11 @@ def ask(state, text):
     if state.fixture:  # no VAST call; the header marks the body as a fixture
         answer, ids = state.recap
         return _q("live", text, answer, ids, "live", "clip", [route])
-    ov = state.tape["original_video"]
     if route == "synthesize":
-        answer, ids = _recap(state, ov, text)
-        return _q("live", text, answer, ids, "live", "clip", ["synthesize"])
-    answer, spans = vss_client.agent_ask(text, ov)
-    if decision.BANNED.search(answer):
-        raise Upstream("agent answer failed the word check")
-    return _q("live", text, _fit(answer), overlap_ids(state.cards, spans), "live", "clip", ["agent_ask"])
+        answer, ids = clip_answer(state, lambda ov: vss_client.synthesize(ov, text), recap_ok, True)
+    else:
+        answer, ids = clip_answer(state, lambda ov: vss_client.agent_ask(text, ov), no_banned, False)
+    return _q("live", text, answer, ids, "live", "clip", [route])
 
 
 STOPWORDS = {"the", "and", "into", "with", "for", "was", "are", "from", "that", "this", "his", "her", "who", "what"}
@@ -278,36 +309,74 @@ BATCH = 32      # segments per published step, so cards show up while a long gam
 MAX_TRIES = 3   # failed sign extractions for one segment, across polls, before it is left out
 
 
-class Builder:
-    """Builds one original_video's tape in the background and publishes snapshots.
+def game_name(videos):
+    """Display id for a game: the first file's name without its _part_NNN suffix."""
+    return re.sub(r"_part_\d+$", "", Path(videos[0]).stem)
 
-    VAST segments the whole game itself (~700 segments for an hour). Cards appear
-    batch by batch while VAST is still indexing and while W&B works through what is
-    indexed. Routes read `state`; they never wait on a model.
+
+class Builder:
+    """Builds one game's tape in the background and publishes snapshots.
+
+    A game is one uploaded video or several pre-split parts, in game order. VAST segments
+    each part itself (~5 s segments); each part keeps its own clock, and cards are shifted
+    onto the game clock by the length of the parts before them. Cards appear batch by batch
+    while VAST is still indexing. Routes read `state`; they never wait on a model.
     """
 
-    def __init__(self, original_video):
-        self.ov = original_video
-        self.cards = {}      # segment id -> (caption, card or None for no contact)
-        self.tries = {}      # segment id -> failed extractions
+    def __init__(self, videos):
+        self.videos = list(videos)
+        self.cards = {}       # card id -> (caption, card on its part's clock or None for no contact, part)
+        self.tries = {}       # card id -> failed extractions
         self.whys, self.dets = {}, {}
+        self.enriched = set()  # card ids whose why + detections calls have completed
         self.recap = None
+        self.durations = [0.0] * len(self.videos)
+        self.done = {}        # part -> its segments, once VAST has fully indexed it
+        self.stopped = False
         self.pool = ThreadPoolExecutor(max_workers=8)
-        self.state = State(tape=self._tape("indexing", []))
+        self.state = State(tape=self._tape("indexing"))
 
-    def _tape(self, status, segments):
-        cards = sorted((c for _, c in self.cards.values() if c), key=lambda c: c["start_sec"])
-        tape = {"contract_version": 2, "status": status, "video_id": Path(self.ov).stem,
-                "original_video": self.ov, "cards": cards}
-        if segments:
-            tape["duration_sec"] = max(s["end_sec"] for s in segments)
+    def _id(self, part, seg_id):
+        return seg_id if len(self.videos) == 1 else f"p{part + 1:02d}-{seg_id}"
+
+    def _offsets(self):
+        # ponytail: a part still indexing has a provisional length, so later parts can shift a
+        # few seconds between snapshots; card ids stay put. Fine for pre-indexed demo chunks.
+        return [sum(self.durations[:k]) for k in range(len(self.videos))]
+
+    def _tape(self, status):
+        offs = self._offsets()
+        cards = sorted((dict(c, start_sec=c["start_sec"] + offs[k], end_sec=c["end_sec"] + offs[k])
+                        for _, c, k in self.cards.values() if c), key=lambda c: c["start_sec"])
+        tape = {"contract_version": 2, "status": status, "video_id": game_name(self.videos),
+                "original_video": self.videos[0], "cards": cards}
+        if sum(self.durations):
+            tape["duration_sec"] = sum(self.durations)
         return tape
 
-    def _publish(self, status, segments):
-        state = State(tape=self._tape(status, segments), whys=dict(self.whys), detections=dict(self.dets),
-                      recap=self.recap)
+    def _publish(self, status):
+        state = State(tape=self._tape(status), whys=dict(self.whys), detections=dict(self.dets), recap=self.recap,
+                      parts=list(zip(self.videos, self._offsets(), self.durations)))
         state.questions = saved_questions(state)
         self.state = state
+
+    def _segments(self):
+        """Indexed segments of every part, with game-wide ids, and the game's VAST status."""
+        statuses, segments = [], []
+        for k, ov in enumerate(self.videos):
+            if k in self.done:
+                status, rows = "ready", self.done[k]
+            else:
+                status, rows = vss_client.segments(ov)
+                if status == "ready":
+                    self.done[k] = rows
+            statuses.append(status)
+            if rows:
+                self.durations[k] = max(r["end_sec"] for r in rows)
+            segments += [dict(r, id=self._id(k, r["id"]), part=k) for r in rows]
+        if all(s == "ready" for s in statuses):
+            return "ready", segments
+        return ("missing_clip" if all(s == "missing_clip" for s in statuses) else "indexing"), segments
 
     def _todo(self, segments):
         return [s for s in segments
@@ -315,8 +384,9 @@ class Builder:
 
     def _card(self, seg):
         try:
-            self.cards[seg["id"]] = (seg["caption"], decision.make_card(seg))
+            self.cards[seg["id"]] = (seg["caption"], decision.make_card(seg), seg["part"])
             self.whys.pop(seg["id"], None)  # a re-ingested caption gets a fresh why
+            self.enriched.discard(seg["id"])
         except decision.UpstreamError as e:
             n = self.tries[seg["id"]] = self.tries.get(seg["id"], 0) + 1
             # ponytail: after MAX_TRIES the segment is left out and only logged; the tape
@@ -329,29 +399,39 @@ class Builder:
         except vss_client.UpstreamError:
             pass  # not cached -> that route answers 502, the card stays
 
+    def _enrich(self):
+        """Why sentences and stored detections for every card not yet done.
+
+        Marked done only after both calls return, so a pass that dies midway is redone on the
+        next poll. A why that W&B or the checks reject stays absent (spec); it is not retried.
+        """
+        cards = [c for _, c, _ in self.cards.values() if c and c["id"] not in self.enriched]
+        self.whys.update(decision.phrase_whys(cards))
+        list(self.pool.map(self._detect, cards))
+        self.enriched.update(c["id"] for c in cards)
+
     def step(self):
         """One pass over what VAST has indexed. True when the tape is complete."""
-        vast_status, segments = vss_client.segments(self.ov)
+        vast_status, segments = self._segments()
         todo = self._todo(segments)
         for i in range(0, len(todo), BATCH):
-            batch = todo[i:i + BATCH]
-            list(self.pool.map(self._card, batch))
-            new = [c for s in batch if (c := self.cards.get(s["id"], (None, None))[1]) and c["id"] not in self.whys]
-            self.whys.update(decision.phrase_whys(new))
-            list(self.pool.map(self._detect, new))
-            self._publish("indexing", segments)
+            list(self.pool.map(self._card, todo[i:i + BATCH]))
+            self._enrich()
+            self._publish("indexing")
+        self._enrich()  # cards a failed earlier pass left without a why or detections
         complete = vast_status == "ready" and not self._todo(segments)
         if complete:
+            self._publish("indexing")  # final offsets before the recap maps its times to cards
             try:
-                self.recap = _recap(self.state, self.ov, "What happens in this clip?")
-            except (vss_client.UpstreamError, Upstream) as e:
+                self.recap = clip_answer(self.state, lambda ov: vss_client.synthesize(ov, RECAP_QUESTION), recap_ok, True)
+            except Upstream as e:
                 print(f"clip recap skipped: {e}", flush=True)
         status = "ready" if complete else ("indexing" if segments or vast_status == "indexing" else "missing_clip")
-        self._publish(status, segments)
+        self._publish(status)
         return complete
 
     def run(self):
-        while True:
+        while not self.stopped:
             try:
                 if self.step():
                     return
@@ -360,20 +440,68 @@ class Builder:
             time.sleep(POLL_SEC)
 
 
+# --- sources: one game per tab -----------------------------------------------
+
+SOURCES = ("chunks", "whole")   # the page's Split game and Whole video tabs
+ENV = {"chunks": "OFF_ICE_CHUNKS", "whole": "OFF_ICE_ORIGINAL_VIDEO"}  # comma-separated, game order
+MAX_PARTS = 200
+
 _lock = threading.Lock()
-_builder = None
+_loaded = {}     # source -> videos loaded from the page; wins over the env default until a restart
+_builders = {}   # source -> Builder
 _fixture = None
 
 
-def current_state():
-    """Fixtures until OFF_ICE_ORIGINAL_VIDEO is set; then the builder's latest snapshot."""
-    global _builder, _fixture
-    ov = os.environ.get("OFF_ICE_ORIGINAL_VIDEO", "").strip()
+def videos_for(source):
+    if source in _loaded:
+        return _loaded[source]
+    return [v.strip() for v in os.environ.get(ENV[source], "").split(",") if v.strip()]
+
+
+def is_fixture():
+    """Nothing loaded in any tab: every tab serves the sample cards and calls nothing."""
+    return not any(videos_for(s) for s in SOURCES)
+
+
+def default_source():
+    return "whole" if videos_for("whole") and not videos_for("chunks") else "chunks"
+
+
+def sources():
+    return {"default": default_source(), "fixture": is_fixture(), "sources": {s: videos_for(s) for s in SOURCES}}
+
+
+def load(source, videos):
+    """Point a tab at uploaded videos, in game order. Raises ValueError on bad input."""
+    if source not in SOURCES:
+        raise ValueError(f"source must be one of {', '.join(SOURCES)}")
+    if not isinstance(videos, list) or not all(isinstance(v, str) and v.startswith("s3://") for v in videos):
+        raise ValueError("videos must be a list of s3:// original_video URIs")
+    videos = list(dict.fromkeys(videos))
+    if source == "whole" and len(videos) != 1:
+        raise ValueError("the whole-video tab takes exactly one video")
+    if not 1 <= len(videos) <= MAX_PARTS:
+        raise ValueError(f"load 1 to {MAX_PARTS} parts")
     with _lock:
-        if not ov:
+        _loaded[source] = videos
+    return sources()
+
+
+def current_state(source=None):
+    """The latest snapshot for a tab. Starts that tab's builder the first time it is asked for."""
+    global _fixture
+    source = source if source in SOURCES else default_source()
+    with _lock:
+        if is_fixture():
             _fixture = _fixture or fixture_state()
             return _fixture
-        if _builder is None or _builder.ov != ov:
-            _builder = Builder(ov)
-            threading.Thread(target=_builder.run, daemon=True).start()
-        return _builder.state
+        videos = videos_for(source)
+        if not videos:
+            return State(tape={"contract_version": 2, "status": "missing_clip", "video_id": "", "cards": []})
+        b = _builders.get(source)
+        if b is None or b.videos != videos:
+            if b:
+                b.stopped = True
+            b = _builders[source] = Builder(videos)
+            threading.Thread(target=b.run, daemon=True).start()
+        return b.state

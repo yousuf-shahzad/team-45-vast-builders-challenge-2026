@@ -32,6 +32,39 @@
   </div>
 </header>
 
+<nav class="tabbar" aria-label="Game source">
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" data-source="chunks" aria-selected="true">Split game</button>
+    <button type="button" role="tab" data-source="whole" aria-selected="false">Whole video</button>
+  </div>
+  <div class="loaded">
+    <span id="loadedText" class="muted small"></span>
+    <button type="button" id="changeBtn" class="btn small-btn">Load videos</button>
+  </div>
+</nav>
+
+<section id="loader" class="panel loader" hidden>
+  <div class="phead">
+    <h2 id="loaderTitle">Load the split game</h2>
+    <span id="loaderHint" class="muted small"></span>
+  </div>
+  <div class="loader-tools">
+    <label class="searchbox slim">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5" stroke-linecap="round"/></svg>
+      <input id="libFilter" type="search" placeholder="Filter by file name" aria-label="Filter videos" autocomplete="off">
+    </label>
+    <label class="check small"><input type="checkbox" id="libAll"> Show the whole archive</label>
+  </div>
+  <ul id="libList" class="liblist"></ul>
+  <div class="loader-foot">
+    <span id="libCount" class="muted small"></span>
+    <div class="loader-btns">
+      <button type="button" class="btn" id="libCancel">Cancel</button>
+      <button type="button" class="btn primary" id="libLoad">Load</button>
+    </div>
+  </div>
+</section>
+
 <section class="panel search">
   <form id="searchForm" class="searchrow" role="search">
     <label class="searchbox">

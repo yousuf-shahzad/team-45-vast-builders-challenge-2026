@@ -30,13 +30,17 @@ let sort = "time";
 let matches = null; // card ids from the last search, best first
 let saved = [];
 let evalLoaded = false;
+let source = "chunks"; // the tab: "chunks" (Split game) or "whole" (Whole video)
+let sourcesInfo = null; // GET api/sources: what each tab has loaded
+let library = []; // GET api/library: uploads in VAST, for the loader
 const whyCache = new Map();
 const detCache = new Map();
 
 // --- helpers ---------------------------------------------------------------
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const url = (path) => BASE + path.replace(/^\//, "");
+const url = (path) => `${BASE}${path.replace(/^\//, "")}${path.includes("?") ? "&" : "?"}source=${source}`;
+const fileName = (uri) => uri.split("/").pop();
 const byId = (id) => cards.find((c) => c.id === id);
 const curIndex = () => cards.findIndex((c) => c.id === curId);
 const signCount = (c) => SIGNS.filter(([k]) => c.signs[k]).length;
@@ -124,7 +128,11 @@ function renderEmpty() {
   if (curId) { empty.hidden = true; return; }
   empty.hidden = false;
   let text = "Press Play tape, or pick a moment below.";
-  if (tape.status === "missing_clip") text = "Upload the game. The tape fills in while VAST indexes it.";
+  if (tape.status === "missing_clip") {
+    text = source === "chunks"
+      ? "Nothing loaded in this tab yet. Use Load videos to pick the game's parts."
+      : "Nothing loaded in this tab yet. Use Load videos to pick one video.";
+  }
   else if (!cards.length && tape.status === "indexing") text = "Processing the game. Moments appear here as segments are indexed.";
   else if (!cards.length) text = "No contact found in this game.";
   $("emptyText").textContent = text;
@@ -485,6 +493,133 @@ async function ask(e) {
   else replyError(wrap, "No answer right now. Try one of the saved questions.");
 }
 
+// --- tabs + loader -----------------------------------------------------------
+
+function remember(value) {
+  try { localStorage.setItem("offIceTab", value); } catch { /* private window: fine */ }
+}
+
+function recalled() {
+  try { return localStorage.getItem("offIceTab"); } catch { return null; }
+}
+
+function resetGame() {
+  clearTimeout(pollTimer);
+  clearTimers();
+  playing = waiting = clipFinished = false;
+  curId = null;
+  cards = [];
+  matches = null;
+  saved = [];
+  evalLoaded = false;
+  whyCache.clear();
+  detCache.clear();
+  video.removeAttribute("src");
+  video.load();
+  for (const id of ["card", "chip", "clock", "stop", "noVideo", "searchChip"]) $(id).hidden = true;
+  $("thread").innerHTML = `<p class="muted small intro">Ask about a hit, a sign, or the whole game. Answers come from the cards and from VAST, and link back to the clip.</p>`;
+  $("chips").innerHTML = "";
+}
+
+function renderLoaded() {
+  const videos = sourcesInfo ? sourcesInfo.sources[source] : [];
+  let text;
+  if (!sourcesInfo || sourcesInfo.fixture) text = "Showing sample data · nothing loaded yet";
+  else if (!videos.length) text = "Nothing loaded in this tab";
+  else if (source === "chunks") text = `${plural(videos.length, "part")} · ${fileName(videos[0])} … ${fileName(videos[videos.length - 1])}`;
+  else text = fileName(videos[0]);
+  $("loadedText").textContent = text;
+  $("loadedText").title = videos.map(fileName).join("\n");
+}
+
+function setTab(value) {
+  source = value === "whole" ? "whole" : "chunks";
+  remember(source);
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.source === source)));
+  $("loader").hidden = true;
+  resetGame();
+  renderLoaded();
+  loadTape();
+}
+
+async function openLoader() {
+  const multi = source === "chunks";
+  $("loaderTitle").textContent = multi ? "Load the split game" : "Load a whole video";
+  $("loaderHint").textContent = multi
+    ? "Tick every part. They play in file-name order, so part_000 comes first."
+    : "Pick one video, at most the 100 MB upload cap.";
+  $("loader").hidden = false;
+  $("libList").innerHTML = `<li class="none muted">Listing uploads in VAST…</li>`;
+  let r = null;
+  try { r = await api("api/library"); } catch { /* network */ }
+  if (!r || !r.ok) {
+    $("libList").innerHTML = `<li class="none muted">Can't list videos from VAST right now.</li>`;
+    return;
+  }
+  library = r.body.videos.slice().sort((a, b) => a.filename.localeCompare(b.filename));
+  $("libAll").checked = !library.some((v) => v.ours);
+  renderLibrary(new Set(sourcesInfo ? sourcesInfo.sources[source] : []));
+}
+
+function chosen() {
+  return [...$("libList").querySelectorAll("input:checked")].map((i) => i.value);
+}
+
+function renderLibrary(selected = new Set(chosen())) {
+  const multi = source === "chunks";
+  const f = $("libFilter").value.trim().toLowerCase();
+  const rows = library.filter((v) => ($("libAll").checked || v.ours || selected.has(v.original_video))
+    && (!f || v.filename.toLowerCase().includes(f)));
+  $("libList").innerHTML = rows.map((v) => `
+    <li><label>
+      <input type="${multi ? "checkbox" : "radio"}" name="lib" value="${esc(v.original_video)}"${selected.has(v.original_video) ? " checked" : ""}>
+      <span class="order"></span>
+      <span class="fname" title="${esc(v.original_video)}">${esc(v.filename || fileName(v.original_video))}</span>
+      <span class="muted small">${plural(v.clips, "clip")}</span>
+    </label></li>`).join("") || `<li class="none muted">No indexed uploads match. Uploads show here once VAST has indexed them.</li>`;
+  numberChosen();
+}
+
+function numberChosen() {
+  const picks = chosen();
+  $("libList").querySelectorAll("input").forEach((i) => {
+    i.closest("label").querySelector(".order").textContent = i.checked && source === "chunks" ? String(picks.indexOf(i.value) + 1).padStart(2, "0") : "";
+  });
+  $("libCount").textContent = source === "chunks"
+    ? `${plural(picks.length, "part")} selected, played in file-name order`
+    : (picks.length ? "1 video selected" : "No video selected");
+  $("libLoad").disabled = !picks.length;
+}
+
+async function loadSelected() {
+  const byName = new Map(library.map((v) => [v.original_video, v.filename]));
+  const videos = chosen().sort((a, b) => (byName.get(a) || a).localeCompare(byName.get(b) || b));
+  $("libLoad").disabled = true;
+  let r = null;
+  try {
+    r = await api(`api/sources/${source}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ videos }) });
+  } catch { /* network */ }
+  $("libLoad").disabled = false;
+  if (!r || !r.ok) {
+    $("loaderHint").textContent = (r && r.body && r.body.error) || "Loading failed. Try again.";
+    return;
+  }
+  sourcesInfo = r.body;
+  $("loader").hidden = true;
+  resetGame();
+  renderLoaded();
+  loadTape();
+}
+
+async function init() {
+  try {
+    const r = await api("api/sources");
+    if (r.ok) sourcesInfo = r.body;
+  } catch { /* the tape call reports it */ }
+  const stored = recalled();
+  setTab(stored === "chunks" || stored === "whole" ? stored : sourcesInfo ? sourcesInfo.default : "chunks");
+}
+
 // --- wiring ----------------------------------------------------------------
 
 video.addEventListener("ended", clipDone);
@@ -518,6 +653,16 @@ $("chips").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-i]");
   if (b) renderReply(addBubble(saved[+b.dataset.i].question), saved[+b.dataset.i]);
 });
+document.querySelector(".tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-source]");
+  if (b && b.dataset.source !== source) setTab(b.dataset.source);
+});
+$("changeBtn").addEventListener("click", () => ($("loader").hidden ? openLoader() : ($("loader").hidden = true)));
+$("libCancel").addEventListener("click", () => { $("loader").hidden = true; });
+$("libLoad").addEventListener("click", loadSelected);
+$("libFilter").addEventListener("input", () => renderLibrary());
+$("libAll").addEventListener("change", () => renderLibrary());
+$("libList").addEventListener("change", numberChosen);
 document.addEventListener("keydown", (e) => {
   if (e.target.closest("input, select, textarea, button, tr")) return;
   if (e.key === " ") { e.preventDefault(); toggle(); }
@@ -525,4 +670,4 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowLeft") prev();
 });
 
-loadTape();
+init();

@@ -30,13 +30,24 @@ Sponsors named on the room banner: tokens&, VAST, CoreWeave, SpaceX, NVIDIA, Wei
 
 The lab archive has no hockey. The demo needs one file the team can use.
 
-- One file for the whole game or period. VAST's segmenter cuts it into segments of about five seconds itself; the app does not split video.
-- `.mp4` or `.mov`, under the backend upload cap (`max_upload_size_mb` from `GET /api/v1/config`, about 100 MB). Other allowed extensions are `.webm`, `.avi`, `.mkv`. A long game is re-encoded to fit: `python tools/off-ice-flag/vss_client.py upload <file>` prints the ffmpeg command and bitrate when the file is over the cap.
+- Each upload must be under the backend's HTTP upload cap (`max_upload_size_mb` from `GET /api/v1/config`, 100 MB on our VM; the backend Ingress also caps bodies at 110 MB). VAST's segmenter cuts every upload into segments of about five seconds itself. `.mp4` or `.mov`; `.webm`, `.avi`, `.mkv` are also allowed.
+- A full game is over the cap, so it goes up as a **split game**: `python tools/off-ice-flag/vss_client.py split game.mp4` cuts it into parts under the cap by stream copy (no re-encode, no quality loss, audio dropped), and `vss_client.py upload game_part_*.mp4` uploads every part after one confirmation. This is the demo path. Re-encoding one smaller file (the ffmpeg command `upload` prints) is the fallback and costs quality.
 - One angle. Play in order.
 - Visible on screen without narration: one hit where a player stays down or leaves the ice, and one bump where both players get straight up.
 - Footage the team filmed or has rights to. Do not download YouTube or other internet video.
 
 Until that file is on the VM, every lane builds against the fixtures in [contracts/fixtures/](../contracts/fixtures/). `tape.json` is the clip. `why.json`, `detections.json`, and `questions.json` match those four cards.
+
+### Two tabs: Split game and Whole video
+
+The page has two tabs. Each tab holds one game and builds its own tape.
+
+- **Split game** (`source=chunks`): several uploaded parts, played in file-name order (`_part_000` first). Each part keeps its own clock from VAST; cards from a part are shifted onto the game clock by the total length of the parts before it. Card ids get a part prefix (`p02-seg-014`) so they stay unique.
+- **Whole video** (`source=whole`): one uploaded video, as before. Card ids have no prefix.
+
+**Load videos** in either tab lists the team's indexed uploads from VAST Explore (ours first: `camera_id` `rink_cam-1` or `location` `rink`, which our upload sets) and loads the picked ones into that tab. Loading only points the tab at videos already in VAST; uploads stay on the CLI because indexing takes minutes. A load lasts until the pod restarts; `OFF_ICE_CHUNKS` (comma-separated, game order) and `OFF_ICE_ORIGINAL_VIDEO` are the defaults the tabs start with.
+
+Per part, the clip recap and agent answers run on each part in parallel and are joined in game order, each prefixed with that part's clock range (`1:00–1:45: ...`). A part whose answer fails the word checks is dropped; if every part fails, the route is 502.
 
 ## Pipeline
 
@@ -246,7 +257,7 @@ One app. The deploy path is [.cursor/skills/deployment/deploy-app-no-registry/SK
 | Weights & Biases | `POST {base}/chat/completions` with `WANDB_API_KEY`. Default base `https://api.inference.wandb.ai/v1`. Lane B confirms the model id from `GET /v1/models` and pins it in `decision.py`. One model id for signs and for the why sentence. |
 | Deploy | Team namespace, Ingress host from the team config, path `/app`. People open https://workshop.thecosmoslabs.com and click **App**. |
 
-Environment the app may read: `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`, `WANDB_API_KEY`, optional `WANDB_INFERENCE_BASE`, `OFF_ICE_ORIGINAL_VIDEO`, `PORT`. Credentials stay in the environment or the Kubernetes Secret. Do not commit `/config/team-45.config` or any token.
+Environment the app may read: `VSS_URL`, `VSS_USERNAME`, `VSS_PASSWORD`, `WANDB_API_KEY`, optional `WANDB_INFERENCE_BASE`, `OFF_ICE_CHUNKS` (Split game tab, comma-separated in game order), `OFF_ICE_ORIGINAL_VIDEO` (Whole video tab), `PORT`. Credentials stay in the environment or the Kubernetes Secret. Do not commit `/config/team-45.config` or any token.
 
 ## HTTP
 
@@ -263,11 +274,16 @@ Ingress `/app` is stripped. The process serves `/`.
 | GET | `/api/questions` | | `{ "contract_version": 2, "questions": [ ... ] }` |
 | POST | `/api/ask` | `{ "question": "..." }` | One question object, `source: "live"` |
 | GET | `/api/search?q=` | | `{ "query": "...", "card_ids": [ ... ] }`, best match first |
+| GET | `/api/sources` | | `{ "default": "chunks", "fixture": false, "sources": { "chunks": [uri, ...], "whole": [uri] } }` |
+| POST | `/api/sources/{chunks\|whole}` | `{ "videos": [uri, ...] }` | Loads that tab; returns `/api/sources`. Bad source, non-`s3://` URIs, or not exactly one video for `whole` is 400 |
+| GET | `/api/library` | | `{ "videos": [ { "original_video", "filename", "clips", "ours" } ] }` from VAST Explore |
 | GET | `/api/eval` | | Eval schema |
 
 Errors: unknown card id is 404. Ask with an empty question is 400. Tape status `missing_clip` on ask, why, detections, or stream is 409 with `{ "error": "not_ready", "status": "missing_clip" }`. While `indexing`, those routes answer from the cards built so far. `GET /api/eval` is 409 until the tape is `ready`. Upstream failure, or a model reply that fails the checks above, is 502 with `{ "error": "upstream" }` and no invented sentence or card.
 
-Until `OFF_ICE_ORIGINAL_VIDEO` is set, tape, why, detections, and questions may return the fixtures, with `video_id` `fixture-period` on the tape. Set `X-Off-Ice-Fixture: 1` on those responses. Do not present fixture cards as the judged clip.
+Every route above except `/health`, `/api/sources`, and `/api/library` takes an optional `?source=chunks|whole` for the tab; without it the default tab is used. A tab with nothing loaded answers `missing_clip`.
+
+Until some tab has videos loaded (by `OFF_ICE_CHUNKS`, `OFF_ICE_ORIGINAL_VIDEO`, or Load videos), tape, why, detections, and questions in every tab may return the fixtures, with `video_id` `fixture-period` on the tape. Set `X-Off-Ice-Fixture: 1` on those responses. Do not present fixture cards as the judged clip.
 
 ## Two-minute demo
 
