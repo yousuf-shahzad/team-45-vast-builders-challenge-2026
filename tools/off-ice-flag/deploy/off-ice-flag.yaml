@@ -1,0 +1,98 @@
+# Off-ice Flag on team-45 (deploy-app-no-registry skill). Run on the VM from tools/off-ice-flag:
+#
+#   export KUBECONFIG=/config/team-45-k8s.yaml
+#   CFG=/config/team-45.config; get() { grep "^$1=" "$CFG" | cut -d= -f2-; }
+#   cm() { kubectl -n team-45 create configmap "$1" --from-file="$2" --dry-run=client -o yaml | kubectl apply -f -; }
+#   cm off-ice-flag-code .
+#   cm off-ice-flag-static static                  # once Lane C has landed static/
+#   cm off-ice-flag-fixtures ../../contracts/fixtures
+#   kubectl -n team-45 create secret generic off-ice-flag-creds \
+#     --from-literal=VSS_URL="$(get INGRESS_URL)" --from-literal=VSS_USERNAME="$(get USERNAME)" \
+#     --from-literal=VSS_PASSWORD="$(get PASSWORD)" --from-literal=WANDB_API_KEY="$WANDB_API_KEY" \
+#     --from-literal=OFF_ICE_ORIGINAL_VIDEO="" \
+#     --dry-run=client -o yaml | kubectl apply -f -      # empty OFF_ICE_ORIGINAL_VIDEO = fixtures
+#   kubectl -n team-45 apply -f deploy/off-ice-flag.yaml
+#   kubectl -n team-45 rollout restart deploy/off-ice-flag   # after any ConfigMap/Secret change
+#
+# Open https://workshop.thecosmoslabs.com and click App.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: off-ice-flag
+  namespace: team-45
+  labels: {app: off-ice-flag}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: off-ice-flag}
+  template:
+    metadata:
+      labels: {app: off-ice-flag}
+    spec:
+      containers:
+      - name: app
+        image: python:3.12-slim
+        ports:
+        - containerPort: 8080
+        env:
+        - {name: PORT, value: "8080"}
+        envFrom:
+        - secretRef: {name: off-ice-flag-creds}
+        command: ["bash", "-c"]
+        # ConfigMap keys are flat, so static/ and fixtures/ come in as their own maps and are copied into place.
+        args:
+        - |
+          set -eu
+          mkdir -p /app && cp -L /cm/code/* /app/
+          for d in static fixtures; do mkdir -p /app/$d; cp -L /cm/$d/* /app/$d/ 2>/dev/null || true; done
+          cd /app
+          pip install --no-cache-dir -q -r requirements.txt
+          exec python main.py
+        volumeMounts:
+        - {name: code, mountPath: /cm/code}
+        - {name: static, mountPath: /cm/static}
+        - {name: fixtures, mountPath: /cm/fixtures}
+        readinessProbe:
+          httpGet: {path: /health, port: 8080}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: code
+        configMap: {name: off-ice-flag-code}
+      - name: static
+        configMap: {name: off-ice-flag-static, optional: true}
+      - name: fixtures
+        configMap: {name: off-ice-flag-fixtures, optional: true}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: off-ice-flag
+  namespace: team-45
+  labels: {app: off-ice-flag}
+spec:
+  selector: {app: off-ice-flag}
+  ports:
+  - {name: http, port: 80, targetPort: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: off-ice-flag
+  namespace: team-45
+  labels: {app: off-ice-flag}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"   # first tape build calls W&B per segment
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: video-lab-team-45.cosmos.vastdata.com
+    http:
+      paths:
+      - path: /app(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: off-ice-flag
+            port: {number: 80}
