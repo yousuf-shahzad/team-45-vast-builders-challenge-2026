@@ -5,12 +5,12 @@ description: >-
   SSH. Picks up at Skills, runs the Test Drive loop with them, then hands off to
   Build. Pauses for confirmation after each step instead of dumping the whole guide.
   Use when a team says they're ready to start, asks "what's next", or wants a guided
-  run instead of reading `README.md` themselves.
+  run instead of reading `BUILD_DAY.md` themselves.
 ---
 
 # Build Day Quickstart
 
-This is `README.md`, run interactively. Kickoff and Access Infra already happened — if the
+This is `BUILD_DAY.md`, run interactively. Kickoff and Access Infra already happened — if the
 team isn't connected to the VM from Cursor yet, send them to those two sections first.
 
 ## Step 1: Video Search & Summary UI
@@ -79,7 +79,7 @@ walking through what they built.
 ## Agent instructions
 
 1. Confirm Cursor is connected to the VM over SSH before starting. If not, point to
-   README.md sections 1–2 and stop.
+   BUILD_DAY.md sections 1–2 and stop.
 2. Go one step at a time. After each step, ask if it worked before moving on — don't
    dump Steps 1–4 at once.
 3. Test Drive is a live loop, not a description of one: actually run each of the six

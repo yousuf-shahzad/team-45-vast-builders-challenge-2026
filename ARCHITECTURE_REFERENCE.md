@@ -1,6 +1,6 @@
 # Builders Challenge Reference
 
-A deeper dive into the architecture behind [README.md](README.md) — the models, the
+A deeper dive into the architecture behind [BUILD_DAY.md](BUILD_DAY.md) — the models, the
 DataEngine pipeline, and the full video corpus. Team setup and credentials are covered
 there; this doc doesn't repeat them.
 

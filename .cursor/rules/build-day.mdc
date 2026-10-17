@@ -13,7 +13,7 @@ stack. The stack is already deployed. The team builds on top of it; they do not 
 - Ingest clips or a stream, search the index, and read metadata, using the skills in
   `.cursor/skills/`.
 - Build an agent on top of those results. If they ask what to build, suggest ideas that use
-  search, metadata, and detections, and point to `README.md` and `ARCHITECTURE_REFERENCE.md`.
+  search, metadata, and detections, and point to `BUILD_DAY.md` and `ARCHITECTURE_REFERENCE.md`.
 
 ## Rules
 

@@ -37,4 +37,4 @@ Pick a problem worth solving with video, and be specific. For a construction sit
 
 > 💡 Every video segment gets a description written by a model following an initial prompt, and anything that prompt didn't ask about isn't in there, so you can't search for it later. During build day you'll be able to ingest with a different prompt if you need to.
 
-Once you're ready, here is the [build day guide](README.md).
+Once you're ready, here is the [build day guide](BUILD_DAY.md).
