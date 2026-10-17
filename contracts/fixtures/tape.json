@@ -1,12 +1,12 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "status": "ready",
   "video_id": "fixture-period",
   "original_video": "fixture://period.mp4",
   "duration_sec": 120,
   "cards": [
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "seg-bump",
       "source": "fixture://period.mp4#seg-bump",
       "start_sec": 12,
@@ -24,7 +24,7 @@
       "stream_path": "/api/segments/seg-bump/stream"
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "seg-head",
       "source": "fixture://period.mp4#seg-head",
       "start_sec": 40,
@@ -42,7 +42,7 @@
       "stream_path": "/api/segments/seg-head/stream"
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "seg-down",
       "source": "fixture://period.mp4#seg-down",
       "start_sec": 75,
@@ -60,7 +60,7 @@
       "stream_path": "/api/segments/seg-down/stream"
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "seg-bump-2",
       "source": "fixture://period.mp4#seg-bump-2",
       "start_sec": 100,

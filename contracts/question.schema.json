@@ -4,17 +4,39 @@
   "title": "OffIceFlagQuestion",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contract_version", "id", "question", "answer", "card_ids", "source"],
+  "required": [
+    "contract_version",
+    "id",
+    "question",
+    "answer",
+    "card_ids",
+    "source",
+    "grounding",
+    "tools"
+  ],
   "properties": {
-    "contract_version": { "const": 1 },
+    "contract_version": { "const": 2 },
     "id": { "type": "string", "minLength": 1 },
     "question": { "type": "string", "minLength": 1 },
-    "answer": { "type": "string" },
+    "answer": { "type": "string", "minLength": 1, "maxLength": 1200 },
     "card_ids": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Card ids from the tape. The UI opens the first id."
+      "description": "Card ids from the tape, in start_sec order. The UI opens the first id. An empty list leaves the playhead where it is."
     },
-    "source": { "enum": ["saved", "live"] }
+    "source": { "enum": ["saved", "live"] },
+    "grounding": {
+      "enum": ["decision", "clip"],
+      "description": "decision: the answer is about come off, watch, or play on. clip: the answer is about what is visible in the clip."
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["rule", "wandb", "agent_ask", "synthesize", "detections"]
+      },
+      "description": "Paths that produced the answer. Decision answers use rule then wandb. Fixture responses may name the production path while X-Off-Ice-Fixture is 1."
+    }
   }
 }

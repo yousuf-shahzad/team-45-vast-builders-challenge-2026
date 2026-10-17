@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["contract_version", "status", "video_id", "cards"],
   "properties": {
-    "contract_version": { "const": 1 },
+    "contract_version": { "const": 2 },
     "status": { "enum": ["ready", "indexing", "missing_clip"] },
     "video_id": { "type": "string" },
     "original_video": { "type": "string" },

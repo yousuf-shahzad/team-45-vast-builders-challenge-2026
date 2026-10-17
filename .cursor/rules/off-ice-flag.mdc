@@ -5,9 +5,9 @@ alwaysApply: true
 
 # Off-ice Flag
 
-The product spec is `docs/OFF_ICE_FLAG_SPEC.md`. The lanes and JSON contracts are `docs/AGENT_CONTRACTS.md`. Contract version is 1.
+The product spec is `docs/OFF_ICE_FLAG_SPEC.md`. The lanes and JSON contracts are `docs/AGENT_CONTRACTS.md`. Contract version is 2.
 
-The app is a trainer flag on one hockey clip. Decisions are only come off, watch, or play on, from visible signs in the caption. Do not name an injury or rate its severity.
+The app is a trainer flag on one hockey clip. Decisions are only come off, watch, or play on, from visible signs in the caption. A question about a decision is answered from those cards: the Python rule, then one Weights & Biases sentence. A question about the clip uses VAST agent ask, a stored synthesize recap, or stored YOLO label counts. Do not name an injury or rate its severity.
 
 ## Before editing
 

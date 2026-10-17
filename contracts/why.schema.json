@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-45.local/off-ice-flag/why.schema.json",
+  "title": "OffIceFlagWhy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "card_id",
+    "decision",
+    "clause",
+    "signs_true",
+    "evidence_quote",
+    "sentence"
+  ],
+  "properties": {
+    "contract_version": { "const": 2 },
+    "card_id": { "type": "string", "minLength": 1 },
+    "decision": { "enum": ["come_off", "watch", "play_on"] },
+    "clause": {
+      "enum": ["left_ice", "slow_to_rise", "two_or_more", "one_sign", "no_signs"]
+    },
+    "signs_true": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": ["head_neck", "slow_to_rise", "left_ice", "favoring_limb"]
+      }
+    },
+    "evidence_quote": { "type": "string", "minLength": 1 },
+    "sentence": { "type": "string", "minLength": 1, "maxLength": 800 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "clause": { "enum": ["left_ice", "slow_to_rise", "two_or_more"] }
+        },
+        "required": ["clause"]
+      },
+      "then": { "properties": { "decision": { "const": "come_off" } } }
+    },
+    {
+      "if": {
+        "properties": { "clause": { "const": "one_sign" } },
+        "required": ["clause"]
+      },
+      "then": { "properties": { "decision": { "const": "watch" } } }
+    },
+    {
+      "if": {
+        "properties": { "clause": { "const": "no_signs" } },
+        "required": ["clause"]
+      },
+      "then": { "properties": { "decision": { "const": "play_on" } } }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "contract_version": 2,
+  "items": [
+    {
+      "contract_version": 2,
+      "id": "seg-bump",
+      "available": true,
+      "objects": [{ "label": "person", "count": 4 }]
+    },
+    {
+      "contract_version": 2,
+      "id": "seg-head",
+      "available": true,
+      "objects": [{ "label": "person", "count": 3 }]
+    },
+    {
+      "contract_version": 2,
+      "id": "seg-down",
+      "available": true,
+      "objects": [{ "label": "person", "count": 2 }]
+    },
+    {
+      "contract_version": 2,
+      "id": "seg-bump-2",
+      "available": true,
+      "objects": [{ "label": "person", "count": 4 }]
+    }
+  ]
+}

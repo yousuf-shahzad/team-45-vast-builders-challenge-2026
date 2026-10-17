@@ -1,37 +1,65 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "questions": [
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "who-comes-off",
       "question": "Who should have come off?",
-      "answer": "The player who stays down after the check at 1:15 and then skates to the bench.",
+      "answer": "Come off. Slow to rise and leaves the ice are true. The caption says stays down, then gets up slowly and skates to the bench.",
       "card_ids": ["seg-down"],
-      "source": "saved"
+      "source": "saved",
+      "grounding": "decision",
+      "tools": ["rule", "wandb"]
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
+      "id": "why-come-off",
+      "question": "Why is that a come off?",
+      "answer": "Come off. Slow to rise and leaves the ice are true. The caption says stays down, then gets up slowly and skates to the bench.",
+      "card_ids": ["seg-down"],
+      "source": "saved",
+      "grounding": "decision",
+      "tools": ["rule", "wandb"]
+    },
+    {
+      "contract_version": 2,
       "id": "head-involved",
       "question": "Was the head involved in any contact?",
-      "answer": "Yes. At 0:40 the contact reaches a player's head. He is back up before the segment ends, so the card is watch.",
+      "answer": "Watch. One sign is true: the head. The caption says the contact reaches the head.",
       "card_ids": ["seg-head"],
-      "source": "saved"
+      "source": "saved",
+      "grounding": "decision",
+      "tools": ["rule", "wandb"]
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "played-through",
       "question": "Which hits did they play through?",
-      "answer": "The board contact at 0:12 and the open-ice bump at 1:40. Both players keep skating.",
+      "answer": "Play on. No signs are true. The caption says both skate on immediately. Play on. No signs are true. The caption says both continue skating.",
       "card_ids": ["seg-bump", "seg-bump-2"],
-      "source": "saved"
+      "source": "saved",
+      "grounding": "decision",
+      "tools": ["rule", "wandb"]
     },
     {
-      "contract_version": 1,
+      "contract_version": 2,
       "id": "before-come-off",
       "question": "What happened just before the come-off?",
-      "answer": "At 0:40 there is a head contact marked watch. The come-off is the later check at 1:15.",
+      "answer": "Watch. One sign is true: the head. The caption says the contact reaches the head. Come off. Slow to rise and leaves the ice are true. The caption says stays down, then gets up slowly and skates to the bench.",
       "card_ids": ["seg-head", "seg-down"],
-      "source": "saved"
+      "source": "saved",
+      "grounding": "decision",
+      "tools": ["rule", "wandb"]
+    },
+    {
+      "contract_version": 2,
+      "id": "clip-recap",
+      "question": "What happens in this clip?",
+      "answer": "Players make shoulder contact along the boards and both skate on. Later a hit reaches the head and that player is back on his skates. After a check a player stays down, gets up slowly, and skates to the bench. Then two players bump in open ice and both continue skating.",
+      "card_ids": ["seg-bump", "seg-head", "seg-down", "seg-bump-2"],
+      "source": "saved",
+      "grounding": "clip",
+      "tools": ["synthesize"]
     }
   ]
 }

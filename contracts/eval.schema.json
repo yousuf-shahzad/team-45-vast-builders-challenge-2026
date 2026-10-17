@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["contract_version", "labels", "matched", "total", "misses"],
   "properties": {
-    "contract_version": { "const": 1 },
+    "contract_version": { "const": 2 },
     "labels": {
       "type": "array",
       "minItems": 8,

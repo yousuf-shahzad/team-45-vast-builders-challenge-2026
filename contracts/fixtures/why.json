@@ -1,0 +1,41 @@
+{
+  "contract_version": 2,
+  "items": [
+    {
+      "contract_version": 2,
+      "card_id": "seg-bump",
+      "decision": "play_on",
+      "clause": "no_signs",
+      "signs_true": [],
+      "evidence_quote": "both skate on immediately",
+      "sentence": "Play on. No signs are true. The caption says both skate on immediately."
+    },
+    {
+      "contract_version": 2,
+      "card_id": "seg-head",
+      "decision": "watch",
+      "clause": "one_sign",
+      "signs_true": ["head_neck"],
+      "evidence_quote": "the contact reaches the head",
+      "sentence": "Watch. One sign is true: the head. The caption says the contact reaches the head."
+    },
+    {
+      "contract_version": 2,
+      "card_id": "seg-down",
+      "decision": "come_off",
+      "clause": "left_ice",
+      "signs_true": ["slow_to_rise", "left_ice"],
+      "evidence_quote": "stays down, then gets up slowly and skates to the bench",
+      "sentence": "Come off. Slow to rise and leaves the ice are true. The caption says stays down, then gets up slowly and skates to the bench."
+    },
+    {
+      "contract_version": 2,
+      "card_id": "seg-bump-2",
+      "decision": "play_on",
+      "clause": "no_signs",
+      "signs_true": [],
+      "evidence_quote": "both continue skating",
+      "sentence": "Play on. No signs are true. The caption says both continue skating."
+    }
+  ]
+}

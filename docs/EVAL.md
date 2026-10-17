@@ -1,6 +1,6 @@
 # Off-ice Flag evaluation
 
-Contract version 1. Lane D owns this file. The check set is eight moments, labeled by a person while watching the clip, before the match count is treated as real.
+Contract version 2. Lane D owns this file. The check set is eight moments, labeled by a person while watching the clip, before the match count is treated as real. Why sentences, detector labels, and question answers are outside this score.
 
 ## Inputs
 
