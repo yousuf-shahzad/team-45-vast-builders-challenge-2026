@@ -118,13 +118,15 @@ The clause names which bullet fired. It does not change the decision. First matc
 The only UI for a hit. Fields are [contracts/card.schema.json](../contracts/card.schema.json).
 
 - The clip, from `GET /api/segments/{id}/stream`.
-- The four signs as yes or no.
+- The four signs as yes or no, and a count: `Visible signs n of 4`. The page computes the count from `signs`. It is how many signs the caption states, not a rating of how serious anything is, and the page says so. The tape list can sort by it so a trainer sees the most-flagged moments first.
 - The decision: Come off, Watch, or Play on.
 - The caption underneath.
 - The why sentence, from `GET /api/cards/{id}/why`. Shape: [contracts/why.schema.json](../contracts/why.schema.json).
 - One in-frame line, from `GET /api/segments/{id}/detections`. Shape: [contracts/detections.schema.json](../contracts/detections.schema.json). Example: `In frame: person 2`. Omit the line when `available` is false.
 
-No coach note, no scout note, no severity word, no injury name. No boxes drawn on the video.
+No coach note, no scout note, no severity word, no injury name, no severity score. No boxes drawn on the video.
+
+The caption on the card is Cosmos's caption with any banned word (list under [Why sentence](#why-sentence)) replaced by `[...]`. `evidence_quote` may not contain a banned word; a reply that quotes one gets one correction turn, then the extraction fails. So the quote, the why sentence, and the shown caption never name an injury or a medical state.
 
 A why response that is not 200 leaves the sentence off. A detections response that is not 200 leaves the in-frame line off. The card from the tape still shows.
 
@@ -155,7 +157,8 @@ Python accepts a sentence only when all of these hold:
 - It contains that card's `evidence_quote` as a substring.
 - It contains the decision words for that card: `Come off`, `Watch`, or `Play on`.
 - It is at most 800 characters.
-- It does not contain, in any case: injury, injured, concussion, fracture, fractured, sprain, tear, torn, severe, severity, diagnosis, medical.
+- It does not name another decision outside the quote (a come off sentence that also says play on is dropped).
+- It does not contain, in any case and in any form (injuries, medically, sprained): injury, injured, concussion, fracture, fractured, sprain, tear, torn, severe, severity, diagnosis, medical, and also hurt, pain, trauma, dislocation, contusion, laceration. The same check runs on the clip recap and on agent answers.
 
 A rejected sentence or a failed call does not invent a why. That card's why is absent. The other cards keep theirs. The tape of cards still returns.
 

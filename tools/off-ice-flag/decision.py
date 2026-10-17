@@ -18,8 +18,13 @@ MODEL_ID = "meta-llama/Llama-3.3-70B-Instruct"
 
 SIGNS = ("head_neck", "slow_to_rise", "left_ice", "favoring_limb")  # spec order for signs_true
 DECISION_WORDS = {"come_off": "Come off", "watch": "Watch", "play_on": "Play on"}
-BANNED = re.compile(r"\b(injury|injured|concussion|fracture|fractured|sprain|tear|torn|severe|"
-                    r"severity|diagnosis|medical)\b", re.I)
+# The spec's list (injury, injured, concussion, fracture, fractured, sprain, tear, torn, severe,
+# severity, diagnosis, medical) matched by stem so "injuries" or "medically" do not slip through,
+# plus words that claim a medical state. Used on every model text the app shows.
+BANNED = re.compile(r"\b(injur\w*|concuss\w*|fractur\w*|sprain\w*|tears?|torn|severe(ly)?|severity|"
+                    r"diagnos\w*|medic(al|ally|ine|ation)?|hurt(s|ing)?|pain(ful|s)?|trauma\w*|"
+                    r"dislocat\w*|contusion\w*|laceration\w*)\b", re.I)
+REDACTED = "[...]"
 MAX_SENTENCE = 800
 
 
@@ -115,8 +120,16 @@ def _check_signs(reply, caption):
     found = _locate(quote, caption) if isinstance(quote, str) else None
     if not found:
         raise ValueError("evidence_quote must be copied exactly from the caption")
+    if BANNED.search(found):
+        raise ValueError("evidence_quote must quote what is visible, without words that name an injury or "
+                         "a medical state; pick other words from the caption")
     out["evidence_quote"] = found
     return out
+
+
+def redact(text):
+    """Caption as shown on the card: words that name an injury or a medical state are cut."""
+    return BANNED.sub(REDACTED, text)
 
 
 def extract_signs(caption):
@@ -176,7 +189,7 @@ def card_from_signs(segment, extracted):
         "source": segment.get("source", ""),
         "start_sec": segment["start_sec"],
         "end_sec": segment["end_sec"],
-        "caption": segment["caption"],
+        "caption": redact(segment["caption"]),  # the quote has no banned word, so it survives
         "contact": True,
         "signs": signs,
         "evidence_quote": extracted["evidence_quote"],
@@ -193,9 +206,10 @@ def make_card(segment):
 # --- why sentence ------------------------------------------------------------
 
 def trace(card):
+    """What W&B sees for a why sentence: id, decision, clause, signs, evidence_quote. Nothing else."""
     s = card["signs"]
-    return {"id": card["id"], "decision": card["decision"], "clause": clause(s),
-            "signs": s, "signs_true": signs_true(s), "evidence_quote": card["evidence_quote"]}
+    return {"id": card["id"], "decision": card["decision"], "clause": clause(s), "signs": s,
+            "evidence_quote": card["evidence_quote"]}
 
 
 WHY_SYSTEM = (
@@ -212,26 +226,33 @@ Each sentence must:
 - name the true signs in plain words: head, slow to rise, leaves the ice, favors a limb (or say no signs are true);
 - include the evidence_quote word for word, after "The caption says";
 - stay under 300 characters and only describe what is visible.
-Never use these words: injury, injured, concussion, fracture, fractured, sprain, tear, torn, severe, severity, diagnosis, medical.
+- never name another decision, never guess what is wrong with a player, and never use these words: injury, injured, concussion, fracture, sprain, tear, torn, severe, severity, diagnosis, medical, hurt, pain.
 
 Example for a come_off trace with slow_to_rise and left_ice true:
 "Come off. Slow to rise and leaves the ice are true. The caption says stays down, then gets up slowly and skates to the bench." """
 
 
+OTHER_DECISIONS = {
+    d: re.compile(r"(?<![a-z])(" + "|".join(w.lower() for k, w in DECISION_WORDS.items() if k != d) + r")(?![a-z])")
+    for d in DECISION_WORDS
+}
+
+
 def sentence_ok(sentence, card):
-    """The spec checks for one why sentence."""
+    """The spec checks for one why sentence, plus: it does not name another decision."""
     if not isinstance(sentence, str) or not sentence.strip() or len(sentence) > MAX_SENTENCE:
         return False
-    low = sentence.lower()
-    return (card["evidence_quote"].lower() in low
+    low, quote = sentence.lower(), card["evidence_quote"].lower()
+    return (quote in low
             and DECISION_WORDS[card["decision"]].lower() in low
+            and not OTHER_DECISIONS[card["decision"]].search(low.replace(quote, ""))
             and not BANNED.search(sentence))
 
 
 def why_object(card, sentence):
-    t = trace(card)
-    return {"contract_version": 2, "card_id": card["id"], "decision": card["decision"], "clause": t["clause"],
-            "signs_true": t["signs_true"], "evidence_quote": card["evidence_quote"], "sentence": sentence.strip()}
+    s = card["signs"]
+    return {"contract_version": 2, "card_id": card["id"], "decision": card["decision"], "clause": clause(s),
+            "signs_true": signs_true(s), "evidence_quote": card["evidence_quote"], "sentence": sentence.strip()}
 
 
 WHY_BATCH = 20  # cards per call; a full game has too many cards for one reply

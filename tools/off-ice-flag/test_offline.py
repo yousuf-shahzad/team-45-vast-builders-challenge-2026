@@ -78,6 +78,23 @@ assert set(got) == {"seg-bump", "seg-down", "seg-bump-2"} and got["seg-down"] ==
 decision._chat = lambda m: (_ for _ in ()).throw(decision.UpstreamError("down"))
 assert decision.phrase_whys(tape["cards"]) == {}
 
+# no medical claims: a quote naming one is corrected, the shown caption is redacted, contradictions dropped
+hurt_seg = dict(seg, caption="After a check he stays down with a possible injury, then skates to the bench.")
+replies = iter([
+    '{"contact": true, "head_neck": false, "slow_to_rise": true, "left_ice": true, "favoring_limb": false, "evidence_quote": "stays down with a possible injury"}',
+    '{"contact": true, "head_neck": false, "slow_to_rise": true, "left_ice": true, "favoring_limb": false, "evidence_quote": "skates to the bench"}',
+])
+decision._chat = lambda m: next(replies)
+hurt_card = decision.make_card(hurt_seg)
+assert hurt_card["caption"] == "After a check he stays down with a possible [...], then skates to the bench."
+assert hurt_card["evidence_quote"] in hurt_card["caption"] and not decision.BANNED.search(hurt_card["caption"])
+for word in ("injuries", "medically", "sprained", "concussed", "in pain", "Severely"):
+    assert decision.BANNED.search(word), word
+for word in ("several", "steering", "paint", "heading"):
+    assert not decision.BANNED.search(word), word
+assert not decision.sentence_ok("Come off, or play on. The caption says stays down, then gets up slowly and skates to the bench.", down)
+assert set(decision.trace(down)) == {"id", "decision", "clause", "signs", "evidence_quote"}  # spec: traces only
+
 # --- Lane D: saved questions reproduce the fixture file -------------------
 state = questions.fixture_state()
 assert state.questions == qs["questions"], [q["id"] for q in state.questions]

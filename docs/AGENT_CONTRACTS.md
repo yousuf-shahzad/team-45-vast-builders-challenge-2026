@@ -83,10 +83,10 @@ Does:
 
 - One page. Fetch `GET /api/tape`. Show `status`. While it is `indexing`, render the cards that are there and poll the tape about every 15 seconds for new ones. On `missing_clip`, show the status and no cards. Never invent cards.
 - Play `stream_path` in `start_sec` order. Play on and watch continue. Come off pauses.
-- Render the clip, the four yes/no signs, the decision, and the caption.
+- Render the clip, the four yes/no signs, `Visible signs n of 4` (counted from `signs`, labelled as a count, never as severity), the decision, and the caption.
 - For the card on screen, fetch `GET /api/cards/{id}/why` and `GET /api/segments/{id}/detections`. Show the why sentence under the caption. Show one in-frame line from `objects` (`In frame: person 2`). If either response is not 200, or `available` is false, omit that line. The card stays.
 - Question list from `GET /api/questions`. Clicking an answer seeks to the first `card_ids` entry. If `card_ids` is empty, leave the playhead. A text box `POST`s `/api/ask`. Under the answer, one line with `grounding` and the `tools` names.
-- Words on screen: Come off, Watch, Play on. Do not write injury, concussion, or severity. Do not draw boxes on the video.
+- Words on screen: Come off, Watch, Play on. Do not write injury, concussion, severity, or any word on the banned list in the spec. Do not draw boxes on the video.
 
 Paste this into Lane C's session:
 
