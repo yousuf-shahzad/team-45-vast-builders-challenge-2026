@@ -312,18 +312,31 @@ def upload_cap_mb():
                  or DEFAULT_UPLOAD_MB)
 
 
+def _ffmpeg():
+    """ffmpeg on PATH, or the static build from `pip install imageio-ffmpeg` (no admin needed)."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return shutil.which("ffmpeg")
+
+
 def fit_hint(path, cap_mb):
     """An ffmpeg command that re-encodes a long game under the cap, so it stays one upload."""
-    duration = None
-    if shutil.which("ffprobe"):
-        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
-                              str(path)], capture_output=True, text=True).stdout.strip()
-        duration = float(out) if out else None
-    if not duration:
-        return f"duration unknown: pick video kbps = {cap_mb:.0f} * 7400 / duration_sec"
-    kbps = int(cap_mb * 8000 * 0.92 / duration)
-    return (f"ffmpeg -i {path.name} -vf scale=-2:540 -c:v libx264 -preset fast -b:v {kbps}k "
-            f"-maxrate {kbps}k -bufsize {2 * kbps}k -an {path.stem}_fit.mp4   # {duration / 60:.0f} min at {kbps} kbps")
+    exe = _ffmpeg()
+    if not exe:
+        return "no ffmpeg found: run `pip install imageio-ffmpeg`, then run this upload command again"
+    probe = subprocess.run([exe, "-i", str(path)], capture_output=True, text=True).stderr
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", probe)
+    if not m:
+        return f"could not read the duration of {path.name}"
+    duration = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+    kbps = int(cap_mb * 8000 * 0.92 / duration)  # video only; audio is dropped (-an)
+    # ponytail: rough bitrate ladder for a wide rink camera; Cosmos samples frames, so fps can drop first.
+    height, fps = (720, 30) if kbps >= 1500 else (540, 15) if kbps >= 500 else (360, 15)
+    return (f'"{exe}" -i "{path}" -vf scale=-2:{height},fps={fps} -c:v libx264 -preset fast -b:v {kbps}k '
+            f'-maxrate {kbps}k -bufsize {2 * kbps}k -an "{path.with_name(path.stem + "_fit.mp4")}"'
+            f"\n  # {duration / 60:.0f} min at {kbps} kbps, {height}p {fps} fps")
 
 
 def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
