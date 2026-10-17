@@ -71,6 +71,14 @@ except decision.UpstreamError:
     pass
 decision._chat = lambda m: '{"contact": false, "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false, "evidence_quote": ""}'
 assert decision.make_card(seg) is None
+# a goalie down for a save: the model may tick slow_to_rise, but no contact means no sign and no card
+decision._chat = lambda m: '{"contact": false, "head_neck": false, "slow_to_rise": true, "left_ice": false, "favoring_limb": false, "evidence_quote": "stays down"}'
+assert decision.extract_signs("The goalie stays down in the crease after the save.") == dict(
+    contact=False, head_neck=False, slow_to_rise=False, left_ice=False, favoring_limb=False, evidence_quote="")
+prompt = (CONTRACTS / "ingest_prompt.txt").read_text(encoding="utf-8").strip()
+assert len(prompt) <= 800 and "No body contact." in prompt  # 800 is the API's custom_prompt cap
+assert not decision.BANNED.search(prompt.replace("Do not name an injury or its severity.", ""))
+assert len(decision.CHECKS) >= 6 and sum(want is None for _, want in decision.CHECKS) >= 4
 
 # why phrasing: good sentences kept, banned / ungrounded ones dropped, the rest of the tape unaffected
 bad = dict(why_by_id["seg-head"], sentence="Watch. A possible injury to the head.")
@@ -326,10 +334,13 @@ with TestClient(main.app) as client:
     vss_client.library = lambda: lib[:1]
     assert client.get("/api/library").json() == {"videos": lib[:1]}
 
-    # Split game tab: the stitched game (its builder is already built, so no thread starts)
-    questions._builders["chunks"] = mb
+    # Split game tab: the stitched game. Loading drops the tab's builder (a reload rebuilds, e.g. after
+    # a re-ingest), so the prebuilt one goes in after the load and no thread starts.
+    questions._builders["chunks"] = sentinel = questions.Builder([ov1, ov2])
     s = client.post("/api/sources/chunks", json={"videos": [ov1, ov2]}).json()
     assert s == {"default": "chunks", "fixture": False, "sources": {"chunks": [ov1, ov2], "whole": []}}
+    assert "chunks" not in questions._builders and sentinel.stopped
+    questions._builders["chunks"] = mb
     r = client.get("/api/tape", params={"source": "chunks"})
     assert "X-Off-Ice-Fixture" not in r.headers and [c["id"] for c in r.json()["cards"]][2] == "p02-seg-down"
     assert client.get("/api/tape").json() == r.json()  # chunks is the default tab
@@ -341,8 +352,8 @@ with TestClient(main.app) as client:
     assert client.get("/api/tape", params={"source": "whole"}).json()["status"] == "missing_clip"
     r = client.post("/api/ask", params={"source": "whole"}, json={"question": "why"})
     assert r.status_code == 409 and r.json() == {"error": "not_ready", "status": "missing_clip"}
-    questions._builders["whole"], b.state = b, part
     client.post("/api/sources/whole", json={"videos": [ov]})
+    questions._builders["whole"], b.state = b, part
     r = client.get("/api/tape", params={"source": "whole"})
     assert r.json()["status"] == "indexing" and len(r.json()["cards"]) == 2
     assert client.get("/api/cards/seg-head/why", params={"source": "whole"}).status_code == 200

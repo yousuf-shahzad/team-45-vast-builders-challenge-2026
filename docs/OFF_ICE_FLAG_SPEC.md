@@ -70,7 +70,7 @@ flowchart LR
   ask --> yolo
 ```
 
-1. Upload the file with `scenario=nhl` and the custom prompt in [contracts/ingest_prompt.txt](../contracts/ingest_prompt.txt) (412 characters; the API cap is 800). The custom prompt overrides the preset text. `nhl` is only the scenario label.
+1. Upload the file with `scenario=nhl` and the custom prompt in [contracts/ingest_prompt.txt](../contracts/ingest_prompt.txt) (721 characters; the API cap is 800). The prompt defines body contact as one player checking, hitting or colliding with another, says what is not contact (puck battles, stick checks, a player falling alone, a goalie dropping for a save, players seated on the bench), and asks about the signs only for the player who was hit. After a prompt change, run `vss_client.py reingest <uri> ...` on uploaded videos, then Load videos again in the app to rebuild the tab. The custom prompt overrides the preset text. `nhl` is only the scenario label.
 2. The running pipeline cuts the file into segments of about five seconds. Cosmos writes a caption per segment. Embeddings and YOLO detections are stored with it. The app does not call the GPU hosts.
 3. A background builder polls VAST every 15 seconds and takes the segments that are searchable so far, in batches of 32. It does not wait for the whole game.
 4. For each caption, Weights & Biases returns contact, the four signs, and a short quote copied from the caption. Temperature is 0. The reply is JSON only. A segment whose caption does not describe body contact is not a card.
@@ -88,13 +88,15 @@ All VAST HTTP lives in `tools/off-ice-flag/vss_client.py`. All Weights & Biases 
 
 ## Signs
 
-A sign is true only when the caption states it.
+`contact` is true only when one player's body hits another player's body. A goalie down for a save, a puck battle, a player falling alone, and players on the bench are not contact. With no contact every sign is false and there is no card.
+
+A sign is true only when the caption states it, and only for a player who was in that contact, after the contact. `python tools/off-ice-flag/decision.py check` runs tricky captions (goalie save, bench, stick battle, line change, real hits) through the live model.
 
 | Field | True when the caption says |
 |---|---|
 | `head_neck` | The head or neck is involved in the contact. |
-| `slow_to_rise` | A player is slow to get up or stays down. |
-| `left_ice` | A player skates to the bench or leaves the ice. |
+| `slow_to_rise` | The player in the contact is slow to get up or stays down. A goalie kneeling for a save or a seated player is not. |
+| `left_ice` | The player in the contact skates to the bench or leaves the ice. A routine line change is not. |
 | `favoring_limb` | A player favors an arm or a leg after the contact. |
 
 Plain words for a true sign, used in the why sentence: head, slow to rise, leaves the ice, favors a limb.

@@ -9,6 +9,7 @@ CLI (run on the VM, where the team config is):
     python vss_client.py split <game.mp4>           # lossless parts under the upload cap
     python vss_client.py upload <file> [<file> ...] # asks once, then uploads each
     python vss_client.py find <filename-part>       # find original_video after upload
+    python vss_client.py reingest <uri> [<uri> ...] # re-caption with the current ingest prompt. Asks first
     python vss_client.py segments <original_video>  # raw + mapped rows, to check field names
 """
 
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -402,6 +404,28 @@ def upload(path, cap_mb=DEFAULT_UPLOAD_MB):
         return json.load(r)
 
 
+def reingest(original_video):
+    """Re-run detector -> reasoner -> embedder -> writer on one indexed upload with the contract prompt.
+
+    VAST replaces each segment slot in place (reingest-videos skill). Returns the job id.
+    """
+    res = _json("/api/v1/dashboard/reingest", method="POST", payload={
+        "original_video": original_video, "chunk_count": 1, "scenario": UPLOAD_FIELDS["scenario"],
+        "custom_prompt": ingest_prompt()})
+    job = res.get("job_id")
+    if not job:
+        raise UpstreamError("reingest: no job_id")
+    return job
+
+
+def reingest_status(job_id):
+    """Job progress, or None when the backend no longer knows the job (it restarted)."""
+    try:
+        return _json(f"/api/v1/dashboard/reingest/{urllib.parse.quote(str(job_id))}")
+    except NotFound:
+        return None
+
+
 def library():
     """Every fully indexed upload in the team archive, as the app's loader shows it."""
     out, offset = [], 0
@@ -454,6 +478,30 @@ def _cli(argv):
         for q in files:
             print(q.name, "->", upload(q, cap).get("object_key"), flush=True)
         print("Next: once indexed, open the app's Split game or Whole video tab and load them.")
+    elif cmd == "reingest" and args:
+        print(f"Re-ingest {len(args)} video(s) with the current ingest prompt ({len(ingest_prompt())} chars). "
+              "Every segment is captioned again on the shared GPUs; this takes minutes. One person per team "
+              "should run it.")
+        for uri in args:
+            print(" ", uri)
+        print("Type yes to start:", end=" ")
+        if input().strip().lower() != "yes":
+            sys.exit("not started")
+        jobs = {uri: reingest(uri) for uri in args}
+        while jobs:
+            time.sleep(4)
+            for uri, job in list(jobs.items()):
+                s = reingest_status(job)
+                name = uri.rsplit("/", 1)[-1]
+                if s is None:
+                    print(f"{name}: backend lost the job record (it may still be running); check the dashboard")
+                    del jobs[uri]
+                    continue
+                print(f"{name}: {s.get('status')} {s.get('indexed_segments', '?')}/{s.get('total_segments', '?')} clips",
+                      flush=True)
+                if s.get("status") in ("completed", "failed", "error"):
+                    del jobs[uri]
+        print("Done. In the app, open the tab and Load videos again to rebuild the tape from the new captions.")
     elif cmd == "find" and args:
         for v in find(args[0]):
             print(v["original_video"], v["filename"], v["clips"], sep="\t")

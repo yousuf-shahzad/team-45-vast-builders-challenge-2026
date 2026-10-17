@@ -3,6 +3,7 @@
 Every W&B HTTP call for Off-ice Flag lives here. Does not import vss_client.py.
 
     python decision.py models     # list W&B model ids, then pin one in MODEL_ID
+    python decision.py check      # run the goalie / bench / real-hit captions through the live model
 """
 
 import json
@@ -80,7 +81,9 @@ def models():
 # --- signs -------------------------------------------------------------------
 
 SIGNS_SYSTEM = (
-    "You read one caption of a hockey video segment and report only what the caption states. "
+    "You read one caption of a ~5 second ice hockey video segment and report only what the caption states. "
+    "You are strict: a hockey game is full of players and goalies going down, kneeling and sitting for normal "
+    "reasons, and none of that counts unless it follows one player hitting another. "
     "Reply with one JSON object and nothing else."
 )
 SIGNS_USER = """Caption:
@@ -89,13 +92,17 @@ SIGNS_USER = """Caption:
 Return exactly these keys:
 {{"contact": bool, "head_neck": bool, "slow_to_rise": bool, "left_ice": bool, "favoring_limb": bool, "evidence_quote": string}}
 
-- contact: players make body contact (a hit, check, bump, or collision).
-- head_neck: the head or neck is involved in the contact.
-- slow_to_rise: a player is slow to get up or stays down.
-- left_ice: a player skates to the bench or leaves the ice.
-- favoring_limb: a player favors an arm or a leg after the contact.
-A field is true only when the caption states it. A negated statement ("not involved", "no one stays down") is false.
-evidence_quote: words copied exactly from the caption that support the true signs, or the contact when no sign is true. Use "" when there is no contact."""
+contact: true only when one player's body hits another player's body: a body check, hit, shove, collision, or a player driven into the boards or glass by another player.
+Not contact: a goalie (goaltender, netminder) dropping, kneeling, sprawling or lying down to make a save; puck battles or stick checks with no body hit; the puck hitting a player; a player who falls or slides on their own; players sitting on the bench or in the penalty box; line changes, celebrations, faceoffs.
+
+The four signs describe only a player who was in that contact, after the contact, on the ice:
+- head_neck: the contact hits the head or neck.
+- slow_to_rise: that player stays down or is slow to get up after the contact. A goalie on the ice for a save, a player sitting on the bench, or a player kneeling during a stoppage is not slow to rise.
+- left_ice: that player skates to the bench or leaves the ice after the contact. A routine line change is not.
+- favoring_limb: that player favors an arm or a leg after the contact.
+
+A field is true only when the caption states it. A negated statement ("No body contact", "not involved", "no one stays down") is false. If contact is false, every sign is false.
+evidence_quote: words copied exactly from the caption that describe the contact and any true sign. Use "" when there is no contact."""
 
 
 def _locate(quote, caption):
@@ -113,9 +120,8 @@ def _check_signs(reply, caption):
         if not isinstance(obj.get(k), bool):
             raise ValueError(f"{k} must be true or false")
     out = {k: obj[k] for k in ("contact",) + SIGNS}
-    if not out["contact"]:
-        out["evidence_quote"] = ""
-        return out
+    if not out["contact"]:  # a sign without contact is a goalie save or a seated player, not a flag
+        return dict(out, **dict.fromkeys(SIGNS, False), evidence_quote="")
     quote = obj.get("evidence_quote")
     found = _locate(quote, caption) if isinstance(quote, str) else None
     if not found:
@@ -278,8 +284,43 @@ def phrase_whys(cards):
     return out
 
 
+# Captions that must not flag, and real hits that must. `python decision.py check` runs them
+# against the live model; rerun after any change to MODEL_ID or the prompts.
+CHECKS = (
+    ("The goaltender drops to his knees in the butterfly to block a shot and stays down in the crease "
+     "while play goes on.", None),
+    ("The goalie lies on the ice covering the puck; no body contact.", None),
+    ("Players sit on the bench watching the play.", None),
+    ("Two players battle for the puck along the boards with their sticks. No body contact.", None),
+    ("Five players skate to the bench for a line change.", None),
+    ("A player loses an edge and falls on his own, then gets up slowly.", None),
+    ("Two players collide in open ice and both keep skating.", "play_on"),
+    ("A player takes a shoulder to the head from an opponent and keeps playing.", "watch"),
+    ("A player is checked hard into the boards by an opponent, stays down on the ice, then skates slowly "
+     "to the bench.", "come_off"),
+)
+
+
+def check():
+    """Run CHECKS against the live model. Returns how many passed."""
+    passed = 0
+    for caption, want in CHECKS:
+        try:
+            got = extract_signs(caption)
+            result = decide(got["contact"], {k: got[k] for k in SIGNS})
+        except UpstreamError as e:
+            result = f"error ({e})"
+        passed += result == want
+        print("PASS" if result == want else "FAIL", f"want {want or 'no card'}, got {result or 'no card'} |",
+              caption[:80], flush=True)
+    print(f"{passed}/{len(CHECKS)} passed with {MODEL_ID}")
+    return passed
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["models"]:
         print("\n".join(models()))
+    elif sys.argv[1:] == ["check"]:
+        sys.exit(0 if check() == len(CHECKS) else 1)
     else:
         sys.exit(__doc__)

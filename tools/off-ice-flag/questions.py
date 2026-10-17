@@ -484,6 +484,9 @@ def load(source, videos):
         raise ValueError(f"load 1 to {MAX_PARTS} parts")
     with _lock:
         _loaded[source] = videos
+        old = _builders.pop(source, None)  # a reload rebuilds, e.g. after a re-ingest changed the captions
+        if old:
+            old.stopped = True
     return sources()
 
 

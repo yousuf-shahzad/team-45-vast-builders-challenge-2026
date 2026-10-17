@@ -1,1 +1,5 @@
-Hockey clip. Describe only what is visible in this segment. State if players make body contact. If they do, state whether the head or neck is involved, whether a player is slow to get up, whether a player stays down or leaves the ice or skates to the bench, and whether a player favors an arm or a leg after the contact. If there is no contact, say the players are skating. Do not name an injury or its severity.
+Ice hockey game video. Describe only what is visible in this clip, in plain sentences.
+Body contact: say whether one player checks, hits or collides with another player, including into the boards. Puck battles, stick checks, a player falling alone, and a goalie dropping to block a shot are not body contact.
+If there is body contact, say whether the head or neck is hit, whether the hit player stays down or is slow to get up, whether that player skates to the bench, and whether that player favors an arm or a leg.
+If there is none, write "No body contact." and describe the play.
+Players seated on the bench and a goalie kneeling in the crease are normal play, not a player down. Do not name an injury or its severity.
