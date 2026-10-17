@@ -1,0 +1,27 @@
+---
+description: Off-ice Flag lane rules for every Cursor session on this repo.
+alwaysApply: true
+---
+
+# Off-ice Flag
+
+The product spec is `docs/OFF_ICE_FLAG_SPEC.md`. The lanes and JSON contracts are `docs/AGENT_CONTRACTS.md`. Contract version is 1.
+
+The app is a trainer flag on one hockey clip. Decisions are only come off, watch, or play on, from visible signs in the caption. Do not name an injury or rate its severity.
+
+## Before editing
+
+Read the spec and the agent contracts. Use a matching skill in `.cursor/skills/` before writing a raw REST call. Never print, log, or commit secrets. Never commit `/config/team-45.config`.
+
+## Stay in one lane
+
+- Lane A: `tools/off-ice-flag/vss_client.py`
+- Lane B: `tools/off-ice-flag/decision.py`
+- Lane C: `tools/off-ice-flag/static/`
+- Lane D: `tools/off-ice-flag/questions.py`, `eval.py`, `main.py`, `requirements.txt`, `deploy/`, and `docs/EVAL.md`
+
+If the user has not named a lane, ask which lane this session is. Do not edit another lane's files. `main.py` only wires routes.
+
+Schemas live in `contracts/`. Do not change them unless the user asks for a contract bump. A bump updates `contract_version`, the fixtures, and both docs in the same commit.
+
+Until a real clip is indexed, test against `contracts/fixtures/`. Push this team's work to the `yousuf` remote only. Do not push `origin`.

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-45.local/off-ice-flag/card.schema.json",
+  "title": "OffIceFlagCard",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "id",
+    "start_sec",
+    "end_sec",
+    "caption",
+    "contact",
+    "signs",
+    "evidence_quote",
+    "decision",
+    "stream_path"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "source": { "type": "string" },
+    "start_sec": { "type": "number", "minimum": 0 },
+    "end_sec": { "type": "number", "minimum": 0 },
+    "caption": { "type": "string" },
+    "contact": { "type": "boolean" },
+    "signs": { "$ref": "#/$defs/signs" },
+    "evidence_quote": { "type": "string" },
+    "decision": { "enum": ["come_off", "watch", "play_on"] },
+    "stream_path": { "type": "string", "pattern": "^/api/segments/.+/stream$" }
+  },
+  "$defs": {
+    "signs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head_neck", "slow_to_rise", "left_ice", "favoring_limb"],
+      "properties": {
+        "head_neck": { "type": "boolean" },
+        "slow_to_rise": { "type": "boolean" },
+        "left_ice": { "type": "boolean" },
+        "favoring_limb": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "contract_version": 1,
+  "status": "ready",
+  "video_id": "fixture-period",
+  "original_video": "fixture://period.mp4",
+  "duration_sec": 120,
+  "cards": [
+    {
+      "contract_version": 1,
+      "id": "seg-bump",
+      "source": "fixture://period.mp4#seg-bump",
+      "start_sec": 12,
+      "end_sec": 17,
+      "caption": "Two players make shoulder contact along the boards and both skate on immediately. The head and neck are not involved.",
+      "contact": true,
+      "signs": {
+        "head_neck": false,
+        "slow_to_rise": false,
+        "left_ice": false,
+        "favoring_limb": false
+      },
+      "evidence_quote": "both skate on immediately",
+      "decision": "play_on",
+      "stream_path": "/api/segments/seg-bump/stream"
+    },
+    {
+      "contract_version": 1,
+      "id": "seg-head",
+      "source": "fixture://period.mp4#seg-head",
+      "start_sec": 40,
+      "end_sec": 45,
+      "caption": "A player is hit and the contact reaches the head. He is back on his skates before the segment ends and stays on the ice.",
+      "contact": true,
+      "signs": {
+        "head_neck": true,
+        "slow_to_rise": false,
+        "left_ice": false,
+        "favoring_limb": false
+      },
+      "evidence_quote": "the contact reaches the head",
+      "decision": "watch",
+      "stream_path": "/api/segments/seg-head/stream"
+    },
+    {
+      "contract_version": 1,
+      "id": "seg-down",
+      "source": "fixture://period.mp4#seg-down",
+      "start_sec": 75,
+      "end_sec": 82,
+      "caption": "After a check the player stays down, then gets up slowly and skates to the bench.",
+      "contact": true,
+      "signs": {
+        "head_neck": false,
+        "slow_to_rise": true,
+        "left_ice": true,
+        "favoring_limb": false
+      },
+      "evidence_quote": "stays down, then gets up slowly and skates to the bench",
+      "decision": "come_off",
+      "stream_path": "/api/segments/seg-down/stream"
+    },
+    {
+      "contract_version": 1,
+      "id": "seg-bump-2",
+      "source": "fixture://period.mp4#seg-bump-2",
+      "start_sec": 100,
+      "end_sec": 105,
+      "caption": "Two players bump in open ice and both continue skating. No one stays down.",
+      "contact": true,
+      "signs": {
+        "head_neck": false,
+        "slow_to_rise": false,
+        "left_ice": false,
+        "favoring_limb": false
+      },
+      "evidence_quote": "both continue skating",
+      "decision": "play_on",
+      "stream_path": "/api/segments/seg-bump-2/stream"
+    }
+  ]
+}

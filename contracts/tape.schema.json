@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-45.local/off-ice-flag/tape.schema.json",
+  "title": "OffIceFlagTape",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "status", "video_id", "cards"],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "status": { "enum": ["ready", "indexing", "missing_clip"] },
+    "video_id": { "type": "string" },
+    "original_video": { "type": "string" },
+    "duration_sec": { "type": "number", "minimum": 0 },
+    "cards": {
+      "type": "array",
+      "items": { "$ref": "card.schema.json" },
+      "description": "Contact cards only, sorted by start_sec ascending. Non-contact segments are omitted."
+    }
+  }
+}

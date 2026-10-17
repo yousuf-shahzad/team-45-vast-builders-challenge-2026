@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-45.local/off-ice-flag/eval.schema.json",
+  "title": "OffIceFlagEval",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "labels", "matched", "total", "misses"],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "labels": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "start_sec", "decision", "signs"],
+        "properties": {
+          "id": { "type": "string" },
+          "start_sec": { "type": "number", "minimum": 0 },
+          "decision": { "enum": ["come_off", "watch", "play_on", "no_card"] },
+          "signs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["head_neck", "slow_to_rise", "left_ice", "favoring_limb"],
+            "properties": {
+              "head_neck": { "type": "boolean" },
+              "slow_to_rise": { "type": "boolean" },
+              "left_ice": { "type": "boolean" },
+              "favoring_limb": { "type": "boolean" }
+            }
+          },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "matched": { "type": "integer", "minimum": 0 },
+    "total": { "const": 8 },
+    "misses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label_id", "reason"],
+        "properties": {
+          "label_id": { "type": "string" },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

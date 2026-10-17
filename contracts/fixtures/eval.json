@@ -1,0 +1,64 @@
+{
+  "contract_version": 1,
+  "labels": [
+    {
+      "id": "L1",
+      "start_sec": 12,
+      "decision": "play_on",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Both players skate on."
+    },
+    {
+      "id": "L2",
+      "start_sec": 25,
+      "decision": "no_card",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Skating only. Must not produce a card."
+    },
+    {
+      "id": "L3",
+      "start_sec": 40,
+      "decision": "watch",
+      "signs": { "head_neck": true, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Head involved, player stays on the ice."
+    },
+    {
+      "id": "L4",
+      "start_sec": 58,
+      "decision": "no_card",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Line change, no contact."
+    },
+    {
+      "id": "L5",
+      "start_sec": 75,
+      "decision": "come_off",
+      "signs": { "head_neck": false, "slow_to_rise": true, "left_ice": true, "favoring_limb": false },
+      "note": "Stays down, then skates to the bench."
+    },
+    {
+      "id": "L6",
+      "start_sec": 88,
+      "decision": "no_card",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Play resumes."
+    },
+    {
+      "id": "L7",
+      "start_sec": 100,
+      "decision": "play_on",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Open-ice bump, both continue."
+    },
+    {
+      "id": "L8",
+      "start_sec": 112,
+      "decision": "no_card",
+      "signs": { "head_neck": false, "slow_to_rise": false, "left_ice": false, "favoring_limb": false },
+      "note": "Whistle, no body contact."
+    }
+  ],
+  "matched": 8,
+  "total": 8,
+  "misses": []
+}

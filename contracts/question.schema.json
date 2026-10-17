@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://team-45.local/off-ice-flag/question.schema.json",
+  "title": "OffIceFlagQuestion",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "id", "question", "answer", "card_ids", "source"],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "question": { "type": "string", "minLength": 1 },
+    "answer": { "type": "string" },
+    "card_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Card ids from the tape. The UI opens the first id."
+    },
+    "source": { "enum": ["saved", "live"] }
+  }
+}
